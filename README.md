@@ -28,6 +28,11 @@ Calculating your capital gains and tracking your adjusted cost base (ACB) manual
     - Shares with the same ticker were bought in the 61 day window (30 days before or 30 days after the sale)
     - There is a non-zero balance of shares sharing the same ticker at the end of the 61 day window
 - Support fractional quantities of shares
+- **Import transaction data** from external sources:
+  - Schwab Equity Awards Center (EAC) JSON exports
+  - TD Direct Investing trade confirmation PDFs
+  - TD Direct Investing monthly statements
+  - Norbert's Gambit journal transaction support (DLR/DLR.U)
 
 ## Commission Handling and Calculations
 ### Commission Handling
@@ -141,19 +146,19 @@ pip install cad-capgains
 ```
 
 ## Try it with Sample Data
-The package includes comprehensive sample datasets in both CSV (`tests/sample.csv`) and JSON (`tests/sample.json`) formats that you can use to try out the tool. After installation, you can run:
+The package includes comprehensive sample datasets in both CSV (`tests/sample_data/sample.csv`) and JSON (`tests/sample_data/sample.json`) formats that you can use to try out the tool. After installation, you can run:
 ```bash
 # Show all transactions (using CSV)
-capgains show tests/sample.csv
+capgains show tests/sample_data/sample.csv
 
 # Show specific stock transactions (using JSON)
-capgains show tests/sample.json -t AAPL
+capgains show tests/sample_data/sample.json -t AAPL
 
 # Calculate capital gains for 2023
-capgains calc tests/sample.csv 2023
+capgains calc tests/sample_data/sample.csv 2023
 
 # Check maximum cost for T1135 reporting
-capgains maxcost tests/sample.json 2023
+capgains maxcost tests/sample_data/sample.json 2023
 ```
 
 The sample data includes:
@@ -180,7 +185,7 @@ The setup script will:
 
 To run the tool during development, use the provided script:
 ```bash
-./scripts/capgains calc tests/sample.csv 2023
+./scripts/capgains calc tests/sample_data/sample.csv 2023
 ```
 
 # Input File Requirements
@@ -231,7 +236,7 @@ dating from May 1, 2007 and onwards.**
 # Usage
 To show the transaction file in a nice tabular format you can run:
 ```bash
-$ capgains show tests/sample.csv
+$ capgains show tests/sample_data/sample.csv
 +------------+--------------------+----------+----------+-------+----------+--------------+------------+
 | date       | description        | ticker   | action   |   qty |    price |   commission |   currency |
 |------------+--------------------+----------+----------+-------+----------+--------------+------------|
@@ -243,7 +248,7 @@ $ capgains show tests/sample.csv
 
 You can also output the results in JSON format:
 ```bash
-$ capgains show tests/sample.csv --format json
+$ capgains show tests/sample_data/sample.csv --format json
 {
   "transactions": [
     {
@@ -259,6 +264,28 @@ $ capgains show tests/sample.csv --format json
     ...
   ]
 }
+```
+
+## Importing Transaction Data
+
+The tool includes converters to import transaction data from various brokerage and tax slip formats. See [CONVERTERS.md](CONVERTERS.md) for full details.
+
+Available converters:
+- **Schwab EAC** — Equity Awards Center JSON exports (ESPP, RSU, sales)
+- **TD Trade Confirmations** — trade confirmation PDFs
+- **TD Monthly Statements** — statements + confirmations with Norbert's Gambit support
+- **TD T5008** — T5008 tax slip PDF from TD WebBroker
+- **CRA T5008** — T5008 entries from CRA's AllSlips PDF (for cross-verification)
+- **Norbert's Gambit** — combine USD buy and CAD sell files
+```bash
+# See all converters
+$ capgains convert --help
+
+# Example: convert and merge data from two sources
+$ capgains convert schwab-eac schwab.json stocks.json
+$ capgains convert td-t5008-pdf t5008.pdf etfs.json
+$ capgains merge stocks.json etfs.json -o combined.json
+$ capgains calc combined.json 2024
 ```
 
 # Finding issues
