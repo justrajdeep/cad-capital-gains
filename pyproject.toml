@@ -40,6 +40,11 @@ Repository = "https://github.com/EmilMaric/cad-capital-gains"
 
 [project.scripts]
 capgains = "capgains.cli:capgains"
+schwab-to-acb = "capgains.schwab_statement_importer:main"
+
+[tool.uv]
+# So `uv sync` / `uv run` include PyMuPDF without `uv run --group pdf ...`
+default-groups = ["dev", "pdf"]
 
 [dependency-groups]
 dev = [

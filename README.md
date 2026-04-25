@@ -26,19 +26,34 @@ uvx cad-capgains --help
 ## Schwab account statement PDFs (optional)
 
 This repo includes a small importer for Charles Schwab PDF statements that
-contain a **Stock Transaction Summary** (word positions are tuned for common
-NVDA-style statements). It writes the same eight-column CSV as above.
+contain a **Stock Transaction Summary** (word positions are tuned for a common
+Schwab layout). It writes the same eight-column CSV as above.
 
-From a git checkout, install the PDF dependency group and run:
+From a git checkout, use either:
 
 ```bash
-uv sync --group pdf
-uv run --group pdf python -m capgains.schwab_statement_importer ~/acb_pdf \
-  -o ~/acb.csv --no-header
+uv run -m capgains.schwab_statement_importer acb_pdf -o <acb.csv>
 ```
 
-Use `--with-header` if you want a header row for spreadsheets; `capgains show`
-/`capgains calc` expect **no** header line.
+```bash
+uv run schwab-to-acb acb_pdf -o <acb.csv>
+```
+
+```bash
+uv run schwab-to-acb acb_pdf -o <acb.csv> -f
+```
+
+The importer **writes a header row by default**. For `capgains show` /
+`capgains calc`, pass **`--no-header`** (or remove the first line) because
+those commands expect data rows only.
+
+If the output file already exists, any new row that matches a line already
+on disk (or a repeated line in the same import run) is **flagged in the
+terminal** (highlighted when the terminal supports color) and in the CSV by
+prefixing the **description** field with **`[DUPLICATE]`** so you can fix or
+remove it before using the file elsewhere. Pass **`-f` / `--force`** to
+ignore the previous file and only detect duplicates **within** the current
+import (full rewrite from PDFs).
 
 # CSV File Requirements
 To start, create a CSV file that will contain all of your transactions. In the CSV file, each line will represent a `BUY` or `SELL` transaction.  Your transactions **must be in order**, with the oldest transactions coming first, followed by newer transactions coming later. The format is as follows:

@@ -2,7 +2,7 @@
 Import Schwab account statement PDFs into cad-capital-gains CSV rows.
 
 Parses the "Stock Transaction Summary" table using word positions from
-PyMuPDF. Layout is tuned for common Schwab NVDA-style statements; other
+PyMuPDF. Layout is tuned for common Schwab stock-summary tables; other
 formats may need boundary tweaks.
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Iterable, List, Optional, Sequence, Set, Tuple
 
 import click
 
@@ -28,6 +28,15 @@ _X_BOUNDS = (0, 95, 180, 265, 345, 405, 475, 555, 635, 705, 1200)
 _DATE_RE = re.compile(
     r"^\s*(\d{1,2})/(\d{1,2})/(\d{2,4})\s*$"
 )
+_ISODATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Marks duplicate rows in the CSV (description) and in the terminal
+_DUP_PREFIX = "[DUPLICATE] "
+_DUP_STAMP_RE = re.compile(r"^\[DUPLICATE\]\s*", re.IGNORECASE)
+
+
+def _strip_dup_stamp(desc: str) -> str:
+    return _DUP_STAMP_RE.sub("", desc, count=1).strip()
 
 
 @dataclass(frozen=True)
@@ -55,16 +64,34 @@ class AcbRow:
             self.currency,
         )
 
+    def as_tuple_duplicate_marked(
+        self,
+        is_duplicate: bool,
+    ) -> Tuple[str, str, str, str, str, str, str, str]:
+        if not is_duplicate:
+            return self.as_tuple()
+        base = _strip_dup_stamp(self.description)
+        desc = _DUP_PREFIX + base
+        return (
+            self.trade_date.isoformat(),
+            desc,
+            self.ticker,
+            self.action,
+            format(self.qty, "f"),
+            format(self.price, "f"),
+            format(self.commission, "f"),
+            self.currency,
+        )
+
 
 def _import_fitz():
     try:
         import fitz  # type: ignore
     except ImportError as e:  # pragma: no cover
         raise click.ClickException(
-            "PyMuPDF is required. Install the pdf dependency group, e.g.\n"
-            "  uv sync --group pdf\n"
-            "then run with:\n"
-            "  uv run --group pdf python -m capgains.schwab_statement_importer"
+            "PyMuPDF is required. In this repo run `uv sync` "
+            "(pdf is a default group) or `uv sync --group pdf`, "
+            "then e.g. `uv run -m capgains.schwab_statement_importer`."
         ) from e
     return fitz
 
@@ -89,6 +116,101 @@ def _parse_money(raw: str) -> Optional[Decimal]:
         return Decimal(s)
     except InvalidOperation:
         return None
+
+
+def _norm_dec_str(s: str) -> str:
+    t = s.strip().replace(",", "").replace("$", "")
+    if not t:
+        d = Decimal(0)
+    else:
+        d = Decimal(t)
+    return format(d.normalize(), "f")
+
+
+def _fmt_key_dec(d: Decimal) -> str:
+    return format(d.normalize(), "f")
+
+
+def _parse_date_field_for_key(s: str) -> str:
+    s = s.strip()
+    if _ISODATE_RE.match(s):
+        return s
+    return _parse_trade_date(s).isoformat()
+
+
+def row_key_from_acb_row(r: AcbRow) -> Tuple[str, ...]:
+    return (
+        r.trade_date.isoformat(),
+        _strip_dup_stamp(r.description).lower(),
+        r.ticker.strip().upper(),
+        r.action.strip().upper(),
+        _fmt_key_dec(r.qty),
+        _fmt_key_dec(r.price),
+        _fmt_key_dec(r.commission),
+        r.currency.strip().upper(),
+    )
+
+
+def row_key_from_csv_fields(cols: Sequence[str]) -> Tuple[str, ...]:
+    if len(cols) < 8:
+        raise ValueError("expected 8 columns")
+    d = _parse_date_field_for_key(cols[0])
+    desc = _strip_dup_stamp(cols[1]).lower()
+    t = cols[2].strip().upper()
+    a = cols[3].strip().upper()
+    q = _norm_dec_str(cols[4])
+    p = _norm_dec_str(cols[5])
+    c = _norm_dec_str(cols[6])
+    cur = cols[7].strip().upper()
+    return (d, desc, t, a, q, p, c, cur)
+
+
+def load_existing_row_keys(path: Path) -> Set[Tuple[str, ...]]:
+    if not path.is_file():
+        return set()
+    keys: Set[Tuple[str, ...]] = set()
+    with path.open(newline="", encoding="utf-8") as fp:
+        rows = list(csv.reader(fp))
+    if not rows:
+        return set()
+    start = 0
+    if rows[0] and rows[0][0].strip().lower() == "date":
+        start = 1
+    for row in rows[start:]:
+        if len(row) < 8:
+            continue
+        if not any(x.strip() for x in row[:8]):
+            continue
+        try:
+            keys.add(row_key_from_csv_fields(row[:8]))
+        except (ValueError, InvalidOperation):
+            continue
+    return keys
+
+
+def resolve_existing_row_keys(
+    out_path: Path,
+    force: bool,
+) -> Set[Tuple[str, ...]]:
+    """Row keys from the output file, or empty when ``--force``."""
+    if force:
+        return set()
+    return load_existing_row_keys(out_path)
+
+
+def mark_duplicate_flags(
+    rows: Sequence[AcbRow],
+    existing_keys: Set[Tuple[str, ...]],
+) -> List[Tuple[AcbRow, bool]]:
+    seen: Set[Tuple[str, ...]] = set()
+    out: List[Tuple[AcbRow, bool]] = []
+    for r in rows:
+        k = row_key_from_acb_row(r)
+        is_dup = k in existing_keys or k in seen
+        if not is_dup:
+            seen.add(k)
+        out.append((r, is_dup))
+    return out
 
 
 def _lines_from_words(
@@ -285,7 +407,7 @@ def collect_rows_from_dir(
 
 
 def write_acb_csv(
-    rows: Iterable[AcbRow],
+    rows: Iterable[Tuple[AcbRow, bool]],
     output_path: Path,
     *,
     with_header: bool,
@@ -306,8 +428,8 @@ def write_acb_csv(
                     "currency",
                 ]
             )
-        for r in rows:
-            w.writerow(r.as_tuple())
+        for r, is_dup in rows:
+            w.writerow(r.as_tuple_duplicate_marked(is_dup))
 
 
 def _path_arg(value: str) -> Path:
@@ -337,26 +459,65 @@ def _path_arg(value: str) -> Path:
 )
 @click.option(
     "--with-header/--no-header",
-    default=False,
+    default=True,
     show_default=True,
-    help="Write a header row (cad-capital-gains expects no header).",
+    help=(
+        "Write a column header line "
+        "(use --no-header for capgains show/calc)."
+    ),
+)
+@click.option(
+    "-f",
+    "--force",
+    is_flag=True,
+    default=False,
+    help=(
+        "Overwrite without comparing to the previous output file "
+        "(duplicate checks only within this import)."
+    ),
 )
 def main(
     input_dir: str,
     output_path: str,
     currency: str,
     with_header: bool,
+    force: bool,
 ) -> None:
     """Read Schwab statement PDFs from INPUT_DIR and write acb-style CSV."""
     _import_fitz()
     in_dir = _path_arg(input_dir)
     out_path = _path_arg(output_path)
     rows = collect_rows_from_dir(in_dir, currency)
-    write_acb_csv(rows, out_path, with_header=with_header)
-    click.echo(
-        "Wrote {} row(s) to {}".format(len(rows), out_path),
-        err=True,
-    )
+    existing = resolve_existing_row_keys(out_path, force)
+    flagged = mark_duplicate_flags(rows, existing)
+    ndup = sum(1 for _r, d in flagged if d)
+    for r, is_dup in flagged:
+        if not is_dup:
+            continue
+        line = "DUPLICATE: {}  {}  {}  qty={}  price={}  {}".format(
+            r.trade_date.isoformat(),
+            r.ticker,
+            r.action,
+            format(r.qty, "f"),
+            format(r.price, "f"),
+            r.currency,
+        )
+        click.secho(line, fg="yellow", err=True)
+        dtxt = _strip_dup_stamp(r.description)
+        if dtxt:
+            click.secho("  {}".format(dtxt[:200]), fg="yellow", err=True)
+    write_acb_csv(flagged, out_path, with_header=with_header)
+    if ndup:
+        click.echo(
+            "Wrote {} row(s) to {} ({} duplicate(s); see [DUPLICATE] in CSV "
+            "and messages above).".format(len(flagged), out_path, ndup),
+            err=True,
+        )
+    else:
+        click.echo(
+            "Wrote {} row(s) to {}".format(len(flagged), out_path),
+            err=True,
+        )
     if not rows:
         click.echo(
             "No stock transactions found (or layout did not match). "

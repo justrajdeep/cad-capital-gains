@@ -8,6 +8,10 @@ from capgains.schwab_statement_importer import (
     _parse_money,
     _parse_trade_date,
     extract_acb_rows_from_page,
+    load_existing_row_keys,
+    mark_duplicate_flags,
+    resolve_existing_row_keys,
+    row_key_from_acb_row,
     write_acb_csv,
 )
 
@@ -50,7 +54,7 @@ def test_extract_acb_rows_from_page_synthetic_buy():
             if mode == "words":
                 return [
                     _w(36, 124, 68, 140, "Stock"),
-                    _w(205, 124, 239, 140, "NVDA"),
+                    _w(205, 124, 239, 140, "EXAM"),
                     _w(711, 162, 756, 176, "Proceeds"),
                     _w(36, 228, 68, 244, "Cash"),
                     _w(69, 228, 136, 244, "Transaction"),
@@ -63,7 +67,7 @@ def test_extract_acb_rows_from_page_synthetic_buy():
                 ]
             return (
                 "Page 3\n"
-                "Stock Transaction Summary: NVDA\n"
+                "Stock Transaction Summary: EXAM\n"
                 "Cash Transaction Summary\n"
             )
 
@@ -71,7 +75,7 @@ def test_extract_acb_rows_from_page_synthetic_buy():
     assert len(rows) == 1
     r = rows[0]
     assert isinstance(r, AcbRow)
-    assert r.ticker == "NVDA"
+    assert r.ticker == "EXAM"
     assert r.action == "BUY"
     assert r.qty == Decimal(5)
     assert r.price == Decimal("10.00")
@@ -84,7 +88,7 @@ def test_extract_acb_rows_from_page_synthetic_sell():
             if mode == "words":
                 return [
                     _w(36, 124, 68, 140, "Stock"),
-                    _w(205, 124, 239, 140, "NVDA"),
+                    _w(205, 124, 239, 140, "EXAM"),
                     _w(711, 162, 756, 176, "Proceeds"),
                     _w(36, 228, 68, 244, "Cash"),
                     _w(69, 228, 136, 244, "Transaction"),
@@ -98,7 +102,7 @@ def test_extract_acb_rows_from_page_synthetic_sell():
                 ]
             return (
                 "Page 3\n"
-                "Stock Transaction Summary: NVDA\n"
+                "Stock Transaction Summary: EXAM\n"
                 "Cash Transaction Summary\n"
             )
 
@@ -116,7 +120,7 @@ def test_write_acb_csv(tmp_path):
         AcbRow(
             trade_date=_parse_trade_date("1/2/2022"),
             description="ESPP PURCHASE",
-            ticker="NVDA",
+            ticker="EXAM",
             action="BUY",
             qty=Decimal(1),
             price=Decimal("10"),
@@ -124,7 +128,65 @@ def test_write_acb_csv(tmp_path):
             currency="USD",
         )
     ]
-    write_acb_csv(rows, p, with_header=True)
+    write_acb_csv([(r, False) for r in rows], p, with_header=True)
     txt = p.read_text(encoding="utf-8")
     assert "date,description" in txt
-    assert "NVDA" in txt
+    assert "EXAM" in txt
+
+
+def _sample_row():
+    return AcbRow(
+        trade_date=_parse_trade_date("1/2/2022"),
+        description="ESPP PURCHASE",
+        ticker="EXAM",
+        action="BUY",
+        qty=Decimal(1),
+        price=Decimal("10"),
+        commission=Decimal(0),
+        currency="USD",
+    )
+
+
+def test_mark_duplicate_flags_within_batch():
+    a = _sample_row()
+    b = _sample_row()
+    out = mark_duplicate_flags([a, b], set())
+    assert out[0][1] is False
+    assert out[1][1] is True
+
+
+def test_mark_duplicate_flags_against_existing(tmp_path):
+    p = tmp_path / "prev.csv"
+    r = _sample_row()
+    write_acb_csv([(r, False)], p, with_header=True)
+    keys = load_existing_row_keys(p)
+    assert row_key_from_acb_row(r) in keys
+    out = mark_duplicate_flags([_sample_row()], keys)
+    assert out[0][1] is True
+
+
+def test_write_acb_csv_duplicate_prefix(tmp_path):
+    p = tmp_path / "out.csv"
+    r = _sample_row()
+    write_acb_csv([(r, True)], p, with_header=True)
+    txt = p.read_text(encoding="utf-8")
+    assert "[DUPLICATE]" in txt
+    assert "ESPP" in txt
+
+
+def test_load_existing_strips_duplicate_prefix_for_keys(tmp_path):
+    p = tmp_path / "f.csv"
+    r = _sample_row()
+    write_acb_csv([(r, True)], p, with_header=True)
+    keys = load_existing_row_keys(p)
+    assert row_key_from_acb_row(r) in keys
+    assert len(keys) == 1
+
+
+def test_resolve_existing_row_keys_force(tmp_path):
+    p = tmp_path / "out.csv"
+    r = _sample_row()
+    write_acb_csv([(r, False)], p, with_header=True)
+    assert len(load_existing_row_keys(p)) == 1
+    assert resolve_existing_row_keys(p, force=True) == set()
+    assert len(resolve_existing_row_keys(p, force=False)) == 1
