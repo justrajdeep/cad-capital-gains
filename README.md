@@ -17,8 +17,28 @@ Calculating your capital gains and tracking your adjusted cost base (ACB) manual
 # Installation
 ```bash
 # To get the latest release
-pip install cad-capgains
+uv tool install cad-capgains
+
+# Or run without installing permanently
+uvx cad-capgains --help
 ```
+
+## Schwab account statement PDFs (optional)
+
+This repo includes a small importer for Charles Schwab PDF statements that
+contain a **Stock Transaction Summary** (word positions are tuned for common
+NVDA-style statements). It writes the same eight-column CSV as above.
+
+From a git checkout, install the PDF dependency group and run:
+
+```bash
+uv sync --group pdf
+uv run --group pdf python -m capgains.schwab_statement_importer ~/acb_pdf \
+  -o ~/acb.csv --no-header
+```
+
+Use `--with-header` if you want a header row for spreadsheets; `capgains show`
+/`capgains calc` expect **no** header line.
 
 # CSV File Requirements
 To start, create a CSV file that will contain all of your transactions. In the CSV file, each line will represent a `BUY` or `SELL` transaction.  Your transactions **must be in order**, with the oldest transactions coming first, followed by newer transactions coming later. The format is as follows:

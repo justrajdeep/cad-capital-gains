@@ -3,15 +3,24 @@
 
 # Used for python distributions
 *.egg-info
+build/
 
 # Used for local tox runs
 .tox/
 
-# Compiled python files
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
 *.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Code coverage file
 .coverage*
+coverage.xml
+htmlcov/
 
 # Mac
 .DS_Store*
@@ -19,5 +28,18 @@
 # Virtual environment
 .venv/
 
-# Python dist folder
+# Python dist / wheels
 dist/
+
+# Local env / secrets
+.env
+.env.*
+
+# Cursor / local IDE metadata
+.specstory/
+.idea/
+
+# Editor backups
+*~
+*.swp
+*.swo
