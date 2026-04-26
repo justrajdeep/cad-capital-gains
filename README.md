@@ -116,12 +116,14 @@ This tool provides the `maxcost` command to help with T1135 reporting:
 
 ```bash
 # Default: Canadian broker - only counts foreign securities (USD stocks)
-$ capgains maxcost tests/sample.csv 2023
+$ uv run capgains maxcost tests/sample_data/sample.csv 2023
 
 # If your account is at a foreign broker, use --foreign-broker to include
 # CAD securities (they are foreign property when held outside Canada)
-$ capgains maxcost tests/sample.csv 2023 --foreign-broker
+$ uv run capgains maxcost tests/sample_data/sample.csv 2023 --foreign-broker
 ```
+
+Use `capgains` instead of `uv run capgains` when the CLI is installed from PyPI. If plain `capgains` fails with `permission denied` in this repository, see **From a git checkout** under *Installation and Setup* (PATH and the `capgains/` package directory).
 
 ### Broker Location Assumptions
 By default, the tool assumes your securities are held at a **Canadian broker**:
@@ -151,25 +153,30 @@ uvx cad-capgains --help
 From a git checkout:
 
 ```bash
-uv sync
 uv run capgains --help
 ```
 
+`uv run` installs or updates the project environment as needed; you do not need a separate `uv sync` first.
+
+**Why `zsh: permission denied: capgains` from the repo root?** This project’s Python package lives in a directory also named `capgains`. If your `PATH` includes the current directory (`.`), the shell can pick that folder instead of the real CLI and try to “execute” it. Use **`uv run capgains`**, put **`.venv/bin` ahead of `.` in `PATH`**, or remove `.` from `PATH`. If you installed the tool with **`uv tool install cad-capgains`**, plain **`capgains`** is fine outside this tree.
+
 ## Try it with Sample Data
-The package includes comprehensive sample datasets in both CSV (`tests/sample_data/sample.csv`) and JSON (`tests/sample_data/sample.json`) formats that you can use to try out the tool. After installation, you can run:
+The package includes comprehensive sample datasets in both CSV (`tests/sample_data/sample.csv`) and JSON (`tests/sample_data/sample.json`) formats that you can use to try out the tool. From a git checkout, run:
 ```bash
 # Show all transactions (using CSV)
-capgains show tests/sample_data/sample.csv
+uv run capgains show tests/sample_data/sample.csv
 
 # Show specific stock transactions (using JSON)
-capgains show tests/sample_data/sample.json -t AAPL
+uv run capgains show tests/sample_data/sample.json -t AAPL
 
 # Calculate capital gains for 2023
-capgains calc tests/sample_data/sample.csv 2023
+uv run capgains calc tests/sample_data/sample.csv 2023
 
 # Check maximum cost for T1135 reporting
-capgains maxcost tests/sample_data/sample.json 2023
+uv run capgains maxcost tests/sample_data/sample.json 2023
 ```
+
+If you installed **`cad-capgains`** from PyPI (e.g. `uv tool install cad-capgains`), use **`capgains`** in place of **`uv run capgains`** in the commands above.
 
 The sample data includes:
 - Multiple years of transactions (2022-2024)
@@ -178,32 +185,19 @@ The sample data includes:
 - Multiple tickers (AAPL, GOOGL, TD.TO, etc.)
 
 ## Development Setup
-For development, you can use the provided setup script:
+Install [uv](https://docs.astral.sh/uv/) if you do not have it yet. Clone the repository and run commands with `uv run` from the project root; it creates or updates the virtual environment and installs dependencies as needed.
+
 ```bash
-# Clone the repository
 git clone <repository-url>
 cd cad-capital-gains
-
-# Run the setup script
-source scripts/envsetup.sh
-```
-
-The setup script will:
-- Install [uv](https://docs.astral.sh/uv/) if not present
-- Run `uv sync` to create a local virtual environment and install dependencies
-
-To run the tool during development:
-```bash
 uv run capgains calc tests/sample_data/sample.csv 2023
-# or:
-./scripts/capgains calc tests/sample_data/sample.csv 2023
 ```
 
 # Input File Requirements
 The tool supports both CSV and JSON input formats for transaction data.
 
 ## CSV Format
-Create a CSV file with each line representing a `BUY` or `SELL` transaction. Transactions **must be in chronological order**. The format is:
+Create a CSV file with each line representing a `BUY` or `SELL` transaction. Rows may be in any order; the tool sorts by transaction date (rows on the same day keep their file order). The format is:
 ```csv
 <yyyy-mm-dd>,<description>,<stock_ticker>,<action(BUY/SELL)>,<quantity>,<price>,<commission>,<currency>[,<source>]
 ```
@@ -216,7 +210,7 @@ Example:
 ```
 
 ## JSON Format
-Create a JSON file containing an array of transaction objects. Transactions **must be in chronological order**. The format is:
+Create a JSON file containing an array of transaction objects. Objects may be in any order; the tool sorts by transaction date (same-day order follows the array). The format is:
 ```json
 [
   {
@@ -246,9 +240,11 @@ Create a JSON file containing an array of transaction objects. Transactions **mu
 dating from May 1, 2007 and onwards.**
 
 # Usage
+The examples below use **`uv run capgains`**. If you installed **`cad-capgains`** from PyPI (e.g. `uv tool install cad-capgains`), you may use **`capgains`** instead of **`uv run capgains`**.
+
 To show the transaction file in a nice tabular format you can run:
 ```bash
-$ capgains show tests/sample_data/sample.csv
+$ uv run capgains show tests/sample_data/sample.csv
 +------------+--------------------+----------+----------+-------+----------+--------------+------------+
 | date       | description        | ticker   | action   |   qty |    price |   commission |   currency |
 |------------+--------------------+----------+----------+-------+----------+--------------+------------|
@@ -260,7 +256,7 @@ $ capgains show tests/sample_data/sample.csv
 
 You can also output the results in JSON format:
 ```bash
-$ capgains show tests/sample_data/sample.csv --format json
+$ uv run capgains show tests/sample_data/sample.csv --format json
 {
   "transactions": [
     {
@@ -291,13 +287,13 @@ Available converters:
 - **Norbert's Gambit** — combine USD buy and CAD sell files
 ```bash
 # See all converters
-$ capgains convert --help
+$ uv run capgains convert --help
 
 # Example: convert and merge data from two sources
-$ capgains convert schwab-eac schwab.json stocks.json
-$ capgains convert td-t5008-pdf t5008.pdf etfs.json
-$ capgains merge stocks.json etfs.json -o combined.json
-$ capgains calc combined.json 2024
+$ uv run capgains convert schwab-eac schwab.json stocks.json
+$ uv run capgains convert td-t5008-pdf t5008.pdf etfs.json
+$ uv run capgains merge stocks.json etfs.json -o combined.json
+$ uv run capgains calc combined.json 2024
 ```
 
 # Finding issues

@@ -5,6 +5,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import os
 
+from .input_actions import VALID_INPUT_ACTIONS
 from .transaction import Transaction
 from .transactions import Transactions
 
@@ -23,6 +24,12 @@ class TransactionsReader:
         "currency"
     ]
     source_column = "source"
+
+    @staticmethod
+    def _sort_by_date_stable(indexed_transactions):
+        """Sort by date; preserve file/row order when dates match."""
+        indexed_transactions.sort(key=lambda x: (x[1].date, x[0]))
+        return [t for _, t in indexed_transactions]
 
     @classmethod
     def _is_header_row(cls, entry):
@@ -57,8 +64,7 @@ class TransactionsReader:
     @classmethod
     def _get_transactions_from_json(cls, json_file):
         """Convert JSON file entries into a list of txs."""
-        transactions = []
-        last_date = None
+        indexed = []
 
         with open(json_file, 'r') as f:
             try:
@@ -136,34 +142,39 @@ class TransactionsReader:
                     )
                     raise ClickException(msg)
 
+                action = str(entry["action"]).strip().upper()
+                if action not in VALID_INPUT_ACTIONS:
+                    msg = (
+                        f"Transaction entry {entry_no}: action is not valid. "
+                        f"Must be one of "
+                        f"{', '.join(sorted(VALID_INPUT_ACTIONS))}"
+                    )
+                    raise ClickException(msg)
+
                 # Create transaction
                 transaction = Transaction(
                     date,
                     entry["description"],
                     entry["ticker"],
-                    entry["action"],
+                    action,
                     qty,
                     price,
                     commission,
                     entry["currency"]
                 )
 
-                # Check chronological order
-                if last_date and transaction.date < last_date:
-                    msg = "Transactions are not in chronological order"
-                    raise ClickException(msg)
-                last_date = transaction.date
-                transactions.append(transaction)
+                indexed.append((entry_no, transaction))
 
+        transactions = cls._sort_by_date_stable(indexed)
         return Transactions(transactions)
 
     @classmethod
     def _get_transactions_from_csv(cls, csv_file):
         """Convert CSV file entries into a list of txs."""
-        transactions = []
+        indexed = []
         with open(csv_file, newline='') as f:
             reader = csv.reader(f)
-            last_date = None
+            file_order = 0
             for entry_no, entry in enumerate(reader):
                 # Strip whitespace from all fields
                 entry = [field.strip() for field in entry]
@@ -260,20 +271,18 @@ class TransactionsReader:
 
                 action_idx = cls.columns.index("action")
                 action = entry[action_idx].strip().upper()
-                valid_actions = ('BUY', 'SELL', 'JOURNAL', 'JOURNAL_IN', 'JOURNAL_OUT')
-                if action not in valid_actions:
+                if action not in VALID_INPUT_ACTIONS:
                     msg = (
                         f"The action entered ({entry[action_idx]}) is not "
-                        f"valid. Must be one of {', '.join(valid_actions)}"
+                        f"valid. Must be one of "
+                        f"{', '.join(sorted(VALID_INPUT_ACTIONS))}"
                     )
                     raise ClickException(msg)
                 entry[action_idx] = action
 
                 transaction = Transaction(*entry)
-                if last_date and transaction.date < last_date:
-                    msg = "Transactions are not in chronological order"
-                    raise ClickException(msg)
-                last_date = transaction.date
-                transactions.append(transaction)
+                indexed.append((file_order, transaction))
+                file_order += 1
 
+        transactions = cls._sort_by_date_stable(indexed)
         return Transactions(transactions)

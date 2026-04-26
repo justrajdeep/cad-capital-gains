@@ -17,6 +17,7 @@ from typing import Any, Iterable, List, Optional, Sequence, Set, Tuple
 
 import click
 
+from .input_actions import VALID_INPUT_ACTIONS
 
 # PyMuPDF word tuple: x0, y0, x1, y1, text, block, line, word
 Word = Tuple[float, float, float, float, str, int, int, int]
@@ -91,6 +92,18 @@ class AcbRow:
     commission: Decimal
     currency: str
     source: str = "Manual"
+
+    def __post_init__(self) -> None:
+        a = self.action.strip().upper()
+        if a not in VALID_INPUT_ACTIONS:
+            raise ValueError(
+                "action must be one of {}, got {!r}".format(
+                    ", ".join(sorted(VALID_INPUT_ACTIONS)),
+                    self.action,
+                )
+            )
+        if a != self.action:
+            object.__setattr__(self, "action", a)
 
     def source_or_manual(self) -> str:
         src = self.source.strip()

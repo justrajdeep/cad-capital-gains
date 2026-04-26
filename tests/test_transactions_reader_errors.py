@@ -133,16 +133,17 @@ def test_invalid_numeric_values(tmpdir):
 
 
 def test_non_chronological_order(tmpdir):
-    """Test handling of transactions not in chronological order."""
+    """Out-of-order rows are sorted by date (stable tie-break on same day)."""
     # Test CSV
     csv_file = tmpdir.join("non_chrono.csv")
     csv_content = "2023-02-01,Test,TEST,BUY,100,10.00,1.00,CAD\n"
     csv_content += "2023-01-01,Test,TEST,BUY,100,10.00,1.00,CAD"
     csv_file.write(csv_content)
 
-    with pytest.raises(ClickException,
-                       match="Transactions are not in chronological order"):
-        TransactionsReader.get_transactions(str(csv_file))
+    csv_txs = TransactionsReader.get_transactions(str(csv_file))
+    assert len(csv_txs) == 2
+    assert csv_txs[0].date.isoformat() == "2023-01-01"
+    assert csv_txs[1].date.isoformat() == "2023-02-01"
 
     # Test JSON
     json_file = tmpdir.join("non_chrono.json")
@@ -170,9 +171,10 @@ def test_non_chronological_order(tmpdir):
     ]
     json_file.write(json.dumps(entries))
 
-    with pytest.raises(ClickException,
-                       match="Transactions are not in chronological order"):
-        TransactionsReader.get_transactions(str(json_file))
+    json_txs = TransactionsReader.get_transactions(str(json_file))
+    assert len(json_txs) == 2
+    assert json_txs[0].date.isoformat() == "2023-01-01"
+    assert json_txs[1].date.isoformat() == "2023-02-01"
 
 
 def test_csv_header_detection_with_date_field(tmp_path):

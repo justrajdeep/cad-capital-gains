@@ -171,11 +171,7 @@ def test_transactions_reader_OS_error(testfiles_dir, create_file):
 
 @pytest.mark.parametrize("create_file", [create_csv_file, create_json_file])
 def test_transactions_read_wrong_dates_order(testfiles_dir, create_file):
-    """Testing TransactionsReader with out of order dates.
-
-    This test verifies that transactions must be entered in chronological
-    order.
-    """
+    """Out-of-order rows are accepted and sorted by date (file order ties)."""
     transaction_after = Transaction(
         date(2018, 2, 20), 'RSU VEST', 'GOOGL', 'BUY', 42, 249.55, 0.0, 'USD'
     )
@@ -196,10 +192,10 @@ def test_transactions_read_wrong_dates_order(testfiles_dir, create_file):
     filepath = create_file(
         testfiles_dir, f"outoforder{ext}", transactions, True
     )
-    with pytest.raises(ClickException) as excinfo:
-        TransactionsReader.get_transactions(filepath)
-    error_msg = ("Transactions are not in chronological order")
-    assert excinfo.value.message == error_msg
+    actual = TransactionsReader.get_transactions(filepath)
+    assert len(actual) == 2
+    assert actual[0].date == date(2018, 2, 15) and actual[0].ticker == 'ANET'
+    assert actual[1].date == date(2018, 2, 20) and actual[1].ticker == 'GOOGL'
 
 
 @pytest.mark.parametrize("create_file", [create_csv_file, create_json_file])
@@ -431,11 +427,7 @@ def test_transactions_reader_json_invalid_numeric(testfiles_dir):
 
 
 def test_transactions_reader_json_not_chronological(testfiles_dir):
-    """Testing TransactionsReader for a JSON file with out-of-order dates.
-
-    This test verifies that transactions in a JSON file must be in
-    chronological order.
-    """
+    """JSON rows out of date order are sorted before processing."""
     json_data = [
         {
             "date": "2018-02-15",
@@ -463,10 +455,10 @@ def test_transactions_reader_json_not_chronological(testfiles_dir):
     with open(filepath, 'w') as f:
         json.dump(json_data, f)
 
-    with pytest.raises(ClickException) as excinfo:
-        TransactionsReader.get_transactions(filepath)
-    error_msg = ("Transactions are not in chronological order")
-    assert excinfo.value.message == error_msg
+    actual = TransactionsReader.get_transactions(filepath)
+    assert len(actual) == 2
+    assert actual[0].date.isoformat() == "2018-02-14"
+    assert actual[1].date.isoformat() == "2018-02-15"
 
 
 def test_transactions_reader_csv_with_header(testfiles_dir):
@@ -763,11 +755,7 @@ def test_json_invalid_commission(tmp_path):
 
 
 def test_json_chronological_order(tmp_path):
-    """Test handling of JSON entries not in chronological order.
-
-    This test verifies that the appropriate error is raised when transactions
-    in a JSON file are not in chronological order.
-    """
+    """JSON entries not in date order are sorted before processing."""
     json_path = tmp_path / "not_chronological.json"
     with open(json_path, "w") as f:
         json.dump(
@@ -796,9 +784,10 @@ def test_json_chronological_order(tmp_path):
             f
         )
 
-    with pytest.raises(ClickException,
-                       match="Transactions are not in chronological order"):
-        TransactionsReader.get_transactions(json_path)
+    actual = TransactionsReader.get_transactions(json_path)
+    assert len(actual) == 2
+    assert actual[0].date.isoformat() == "2022-01-01"
+    assert actual[1].date.isoformat() == "2022-02-01"
 
 
 def test_csv_header_detection_with_date_field(tmp_path):
