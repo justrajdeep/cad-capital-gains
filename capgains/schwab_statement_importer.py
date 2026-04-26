@@ -29,10 +29,12 @@ _DATE_RE = re.compile(
     r"^\s*(\d{1,2})/(\d{1,2})/(\d{2,4})\s*$"
 )
 _ISODATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_TIME_RE = re.compile(r"^\d{2}:\d{2}:\d{2}$")
 
 # Marks duplicate rows in the CSV (description) and in the terminal
 _DUP_PREFIX = "[DUPLICATE] "
 _DUP_STAMP_RE = re.compile(r"^\[DUPLICATE\]\s*", re.IGNORECASE)
+_COMMON_SPLIT_FACTORS = (2, 3, 4, 5, 10)
 
 
 def _strip_dup_stamp(desc: str) -> str:
@@ -51,8 +53,15 @@ class AcbRow:
     price: Decimal
     commission: Decimal
     currency: str
+    source: str = "Manual"
 
-    def as_tuple(self) -> Tuple[str, str, str, str, str, str, str, str]:
+    def source_or_manual(self) -> str:
+        src = self.source.strip()
+        return src if src else "Manual"
+
+    def as_tuple(
+        self,
+    ) -> Tuple[str, str, str, str, str, str, str, str, str]:
         return (
             self.trade_date.isoformat(),
             self.description,
@@ -62,12 +71,13 @@ class AcbRow:
             format(self.price, "f"),
             format(self.commission, "f"),
             self.currency,
+            self.source_or_manual(),
         )
 
     def as_tuple_duplicate_marked(
         self,
         is_duplicate: bool,
-    ) -> Tuple[str, str, str, str, str, str, str, str]:
+    ) -> Tuple[str, str, str, str, str, str, str, str, str]:
         if not is_duplicate:
             return self.as_tuple()
         base = _strip_dup_stamp(self.description)
@@ -81,6 +91,7 @@ class AcbRow:
             format(self.price, "f"),
             format(self.commission, "f"),
             self.currency,
+            self.source_or_manual(),
         )
 
 
@@ -98,6 +109,8 @@ def _import_fitz():
 
 def _parse_trade_date(raw: str) -> date:
     raw = raw.strip()
+    if _ISODATE_RE.match(raw):
+        return date.fromisoformat(raw)
     m = _DATE_RE.match(raw)
     if not m:
         raise ValueError("bad date {!r}".format(raw))
@@ -116,6 +129,107 @@ def _parse_money(raw: str) -> Optional[Decimal]:
         return Decimal(s)
     except InvalidOperation:
         return None
+
+
+def _is_date_token(s: str) -> bool:
+    s = s.strip()
+    return bool(_ISODATE_RE.match(s) or _DATE_RE.match(s))
+
+
+def _is_time_token(s: str) -> bool:
+    return bool(_TIME_RE.match(s.strip()))
+
+
+def _infer_split_factor_and_mode(
+    quantities: Sequence[Decimal],
+) -> Tuple[Optional[int], Optional[str]]:
+    """
+    Infer split factor and quantity mode from split rows.
+
+    mode='added': quantity already represents added shares.
+    mode='post': quantity appears to be post-split total shares.
+    """
+    if not quantities:
+        return None, None
+    best = (0, None, None)  # score, factor, mode
+    for factor in _COMMON_SPLIT_FACTORS:
+        add_base = Decimal(factor - 1)
+        post_base = Decimal(factor)
+        add_hits = sum(1 for q in quantities if (q % add_base) == 0)
+        post_hits = sum(1 for q in quantities if (q % post_base) == 0)
+        add_better = add_hits > best[0]
+        add_tie = add_hits == best[0] and factor > (best[1] or 0)
+        if add_better or add_tie:
+            best = (add_hits, factor, "added")
+        post_better = post_hits > best[0]
+        post_tie = post_hits == best[0] and factor > (best[1] or 0)
+        if post_better or post_tie:
+            best = (post_hits, factor, "post")
+    score, factor, mode = best
+    if score <= 0:
+        return None, None
+    return factor, mode
+
+
+def _normalize_split_rows(
+    rows: Sequence[AcbRow],
+    *,
+    verbose: bool = False,
+) -> List[AcbRow]:
+    """
+    Normalize stock split rows to incremental-share form.
+
+    If split rows look like post-split totals for factor F, convert
+    qty -> qty * (F-1) / F so they become added-share rows.
+    """
+    out: List[AcbRow] = list(rows)
+    idxs = [
+        i for i, r in enumerate(out)
+        if "stock split" in r.description.lower()
+    ]
+    if not idxs:
+        return out
+
+    groups = {}
+    for i in idxs:
+        r = out[i]
+        groups.setdefault((r.ticker, r.trade_date), []).append(i)
+
+    for (ticker, trade_date), gidx in groups.items():
+        quantities = [out[i].qty for i in gidx]
+        factor, mode = _infer_split_factor_and_mode(quantities)
+        if verbose:
+            click.echo(
+                "Split analysis {} {}: factor={}, mode={}, rows={}".format(
+                    ticker,
+                    trade_date.isoformat(),
+                    factor,
+                    mode,
+                    len(gidx),
+                ),
+                err=True,
+            )
+        if factor is None or mode != "post":
+            # Already incremental (or not inferable).
+            continue
+
+        f = Decimal(factor)
+        fm1 = Decimal(factor - 1)
+        for i in gidx:
+            r = out[i]
+            new_qty = (r.qty * fm1) / f
+            out[i] = AcbRow(
+                trade_date=r.trade_date,
+                description=r.description,
+                ticker=r.ticker,
+                action=r.action,
+                qty=new_qty,
+                price=r.price,
+                commission=r.commission,
+                currency=r.currency,
+                source=r.source,
+            )
+    return out
 
 
 def _norm_dec_str(s: str) -> str:
@@ -280,9 +394,148 @@ def _cash_section_y(lines: Sequence[Sequence[Word]]) -> Optional[float]:
     return None
 
 
+def _row_from_stock_fields(
+    trade_date_str: str,
+    activity: str,
+    desc: str,
+    purchase_price_str: str,
+    acq_fmv_str: str,
+    shares_str: str,
+    sale_price_str: str,
+    proceeds_str: str,
+    ticker: str,
+    default_currency: str,
+    source: str,
+) -> Optional[AcbRow]:
+    try:
+        trade_date = _parse_trade_date(trade_date_str)
+    except ValueError:
+        return None
+
+    shares_raw = _parse_money(shares_str)
+    if shares_raw is None:
+        return None
+    qty = abs(shares_raw)
+
+    sale_price = _parse_money(sale_price_str) or Decimal(0)
+    proceeds = _parse_money(proceeds_str) or Decimal(0)
+    acq_fmv = _parse_money(acq_fmv_str) or Decimal(0)
+
+    summary_l = "{} {}".format(activity, desc).lower()
+    is_stock_split = "stock split" in summary_l
+    act_l = activity.lower()
+    if any(k in act_l for k in ("sell", "sale", "sold")):
+        action = "SELL"
+    elif proceeds > 0 and sale_price > 0:
+        action = "SELL"
+    elif any(k in act_l for k in (
+        "buy", "purchase", "vest", "grant", "espp", "rsu",
+    )):
+        action = "BUY"
+    elif proceeds > 0:
+        action = "SELL"
+    else:
+        action = "BUY"
+
+    # Stock splits should increase share count without changing total ACB.
+    # Represent split rows as zero-cost BUY entries.
+    if is_stock_split:
+        action = "BUY"
+        price = Decimal(0)
+    else:
+        # Per user request: otherwise use Acquisition FMV as the price basis.
+        price = acq_fmv if acq_fmv > 0 else Decimal(0)
+
+    description = " ".join(
+        p for p in (activity.strip(), desc.strip()) if p
+    ).strip() or "Schwab"
+
+    return AcbRow(
+        trade_date=trade_date,
+        description=description[:500],
+        ticker=ticker,
+        action=action,
+        qty=qty,
+        price=price,
+        commission=Decimal(0),
+        currency=default_currency,
+        source=source,
+    )
+
+
+def _extract_rows_from_text_blocks(
+    page_text: str,
+    ticker: str,
+    default_currency: str,
+    source: str,
+) -> List[AcbRow]:
+    lines = [ln.strip() for ln in page_text.splitlines() if ln.strip()]
+    if "No stock transactions during this period" in page_text:
+        return []
+
+    try:
+        start = lines.index("Proceeds") + 1
+    except ValueError:
+        return []
+
+    rows: List[AcbRow] = []
+    i = start
+    while i < len(lines):
+        token = lines[i]
+        low = token.lower()
+        if low.startswith("cash transaction summary"):
+            break
+        if token.startswith("* This transaction occurred"):
+            break
+        if token.startswith("©"):
+            break
+        if low.startswith("page "):
+            i += 1
+            continue
+        if not _is_date_token(token):
+            i += 1
+            continue
+
+        trade_date_str = token
+        i += 1
+        if i < len(lines) and _is_time_token(lines[i]):
+            i += 1
+
+        if i + 8 >= len(lines):
+            break
+        activity = lines[i]
+        desc = lines[i + 1]
+        # skip purchase/vest date (i+2) and subscription FMV (i+5)
+        purchase_price_str = lines[i + 3]
+        acq_fmv_str = lines[i + 4]
+        shares_str = lines[i + 6]
+        sale_price_str = lines[i + 7]
+        proceeds_str = lines[i + 8]
+        i += 9
+
+        row = _row_from_stock_fields(
+            trade_date_str=trade_date_str,
+            activity=activity,
+            desc=desc,
+            purchase_price_str=purchase_price_str,
+            acq_fmv_str=acq_fmv_str,
+            shares_str=shares_str,
+            sale_price_str=sale_price_str,
+            proceeds_str=proceeds_str,
+            ticker=ticker,
+            default_currency=default_currency,
+            source=source,
+        )
+        if row is not None:
+            rows.append(row)
+
+    return rows
+
+
 def extract_acb_rows_from_page(
     page: Any,
     default_currency: str,
+    source: str = "Manual",
 ) -> List[AcbRow]:
     """Parse one PDF page; returns rows (may be empty)."""
     text = page.get_text()
@@ -297,8 +550,12 @@ def extract_acb_rows_from_page(
     lines = _lines_from_words(words)
     y_cash = _cash_section_y(lines)
     y_header = _header_end_y(lines, y_cash)
-    if y_header is None or y_cash is None:
+    if y_header is None:
         return []
+    if y_cash is None:
+        # Continued pages often omit a cash summary section; keep scanning
+        # until the end of the page and let row-level validation filter noise.
+        y_cash = float("inf")
 
     rows: List[AcbRow] = []
     for ln in lines:
@@ -318,64 +575,42 @@ def extract_acb_rows_from_page(
         if not cols[0]:
             continue
         try:
-            trade_date = _parse_trade_date(cols[0])
+            _parse_trade_date(cols[0])
         except ValueError:
             continue
 
-        activity = cols[1].strip()
-        desc = cols[2].strip()
-        purchase_price = _parse_money(cols[4]) or Decimal(0)
-        sale_price = _parse_money(cols[8]) or Decimal(0)
-        proceeds = _parse_money(cols[9]) or Decimal(0)
-        shares_raw = _parse_money(cols[7])
-        if shares_raw is None:
-            continue
-        qty = abs(shares_raw)
-
-        act_l = activity.lower()
-        if any(k in act_l for k in ("sell", "sale", "sold")):
-            action = "SELL"
-        elif proceeds > 0 and sale_price > 0:
-            action = "SELL"
-        elif any(k in act_l for k in (
-            "buy", "purchase", "vest", "grant", "espp", "rsu",
-        )):
-            action = "BUY"
-        elif proceeds > 0:
-            action = "SELL"
-        else:
-            action = "BUY"
-
-        if action == "SELL":
-            if sale_price > 0:
-                price = sale_price
-            elif qty > 0 and proceeds > 0:
-                price = proceeds / qty
-            else:
-                price = Decimal(0)
-        else:
-            if purchase_price > 0:
-                price = purchase_price
-            else:
-                acq = _parse_money(cols[5]) or Decimal(0)
-                price = (acq / qty) if qty > 0 and acq > 0 else Decimal(0)
-
-        description = " ".join(
-            p for p in (activity, desc) if p
-        ).strip() or "Schwab"
-
-        rows.append(
-            AcbRow(
-                trade_date=trade_date,
-                description=description[:500],
-                ticker=ticker,
-                action=action,
-                qty=qty,
-                price=price,
-                commission=Decimal(0),
-                currency=default_currency,
-            )
+        row = _row_from_stock_fields(
+            trade_date_str=cols[0],
+            activity=cols[1],
+            desc=cols[2],
+            purchase_price_str=cols[4],
+            acq_fmv_str=cols[5],
+            shares_str=cols[7],
+            sale_price_str=cols[8],
+            proceeds_str=cols[9],
+            ticker=ticker,
+            default_currency=default_currency,
+            source=source,
         )
+        if row is not None:
+            rows.append(row)
+
+    # Fallback for statements where each transaction is rendered as vertical
+    # blocks (date/time/activity/... one line each) instead of a row grid.
+    fallback_rows = _extract_rows_from_text_blocks(
+        text,
+        ticker=ticker,
+        default_currency=default_currency,
+        source=source,
+    )
+    seen = {row_key_from_acb_row(r) for r in rows}
+    for r in fallback_rows:
+        key = row_key_from_acb_row(r)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(r)
+
     return rows
 
 
@@ -385,9 +620,16 @@ def extract_acb_rows_from_pdf(
 ) -> List[AcbRow]:
     fitz = _import_fitz()
     rows: List[AcbRow] = []
+    source = path.name.strip() or "Manual"
     with fitz.open(path) as doc:
         for page in doc:
-            rows.extend(extract_acb_rows_from_page(page, default_currency))
+            rows.extend(
+                extract_acb_rows_from_page(
+                    page,
+                    default_currency,
+                    source=source,
+                )
+            )
     rows.sort(key=lambda r: (r.trade_date, r.ticker, r.action))
     return rows
 
@@ -395,13 +637,42 @@ def extract_acb_rows_from_pdf(
 def collect_rows_from_dir(
     input_dir: Path,
     default_currency: str,
+    *,
+    verbose: bool = False,
 ) -> List[AcbRow]:
     pdfs = sorted(input_dir.glob("*.pdf")) + sorted(input_dir.glob("*.PDF"))
+    relevant_pdfs = [
+        p for p in pdfs
+        if p.name.lower().startswith("account statement")
+    ]
+    skipped_pdfs = [
+        p for p in pdfs
+        if p not in relevant_pdfs
+    ]
+    if verbose:
+        msg = "Found {} PDF(s): {} Account Statement file(s), {} skipped."
+        click.echo(
+            msg.format(
+                len(pdfs),
+                len(relevant_pdfs),
+                len(skipped_pdfs),
+            ),
+            err=True,
+        )
+        for p in skipped_pdfs:
+            click.echo(
+                "Skipping non-Account-Statement file: {}".format(p.name),
+                err=True,
+            )
+
     all_rows: List[AcbRow] = []
-    for p in pdfs:
+    for p in relevant_pdfs:
         if not p.is_file():
             continue
+        if verbose:
+            click.echo("Parsing {}".format(p.name), err=True)
         all_rows.extend(extract_acb_rows_from_pdf(p, default_currency))
+    all_rows = _normalize_split_rows(all_rows, verbose=verbose)
     all_rows.sort(key=lambda r: (r.trade_date, r.ticker, r.action))
     return all_rows
 
@@ -426,6 +697,7 @@ def write_acb_csv(
                     "price",
                     "commission",
                     "currency",
+                    "source",
                 ]
             )
         for r, is_dup in rows:
@@ -476,18 +748,30 @@ def _path_arg(value: str) -> Path:
         "(duplicate checks only within this import)."
     ),
 )
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    default=False,
+    help="Print file scanning/parsing progress to stderr.",
+)
 def main(
     input_dir: str,
     output_path: str,
     currency: str,
     with_header: bool,
     force: bool,
+    verbose: bool,
 ) -> None:
     """Read Schwab statement PDFs from INPUT_DIR and write acb-style CSV."""
     _import_fitz()
     in_dir = _path_arg(input_dir)
     out_path = _path_arg(output_path)
-    rows = collect_rows_from_dir(in_dir, currency)
+    rows = collect_rows_from_dir(
+        in_dir,
+        currency,
+        verbose=verbose,
+    )
     existing = resolve_existing_row_keys(out_path, force)
     flagged = mark_duplicate_flags(rows, existing)
     ndup = sum(1 for _r, d in flagged if d)

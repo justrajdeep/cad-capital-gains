@@ -27,25 +27,34 @@ uvx cad-capgains --help
 
 This repo includes a small importer for Charles Schwab PDF statements that
 contain a **Stock Transaction Summary** (word positions are tuned for a common
-Schwab layout). It writes the same eight-column CSV as above.
+Schwab layout). It writes a CSV compatible with `capgains` and includes a
+`source` column.
 
-From a git checkout, use either:
-
-```bash
-uv run -m capgains.schwab_statement_importer acb_pdf -o <acb.csv>
-```
+From a git checkout, run:
 
 ```bash
-uv run schwab-to-acb acb_pdf -o <acb.csv>
+uv run schwab-to-acb acb_pdf -o <acb.csv> [-f] [-v]
 ```
 
-```bash
-uv run schwab-to-acb acb_pdf -o <acb.csv> -f
-```
+The importer **writes a header row by default**. `capgains show` /
+`capgains calc` now handle files with or without a header row.
 
-The importer **writes a header row by default**. For `capgains show` /
-`capgains calc`, pass **`--no-header`** (or remove the first line) because
-those commands expect data rows only.
+The importer also writes a `source` column (typically the PDF filename). If
+no source data is available, it defaults to `Manual`.
+
+For Schwab imports, the CSV `price` column is taken from the statement's
+**Acquisition FMV** value.
+Exception: `Stock Split` rows are emitted with `price=0` so split events do
+not artificially increase ACB.
+
+For stock splits, the importer also applies split-aware quantity handling:
+it infers the split factor/mode from statement rows and normalizes split
+entries to incremental-share form when needed.
+
+Example (10-for-1 split):
+- If you held 100 shares before the split, you should end up with 1000 total.
+- The importer records the split as an incremental row of +900 shares at
+  `price=0`, so share count changes but total ACB does not.
 
 If the output file already exists, any new row that matches a line already
 on disk (or a repeated line in the same import run) is **flagged in the
@@ -55,16 +64,20 @@ remove it before using the file elsewhere. Pass **`-f` / `--force`** to
 ignore the previous file and only detect duplicates **within** the current
 import (full rewrite from PDFs).
 
+Only files named like `Account Statement_*.PDF` are parsed; other PDFs in the
+input folder are skipped. Use **`-v` / `--verbose`** to see what was skipped
+and what was parsed.
+
 # CSV File Requirements
 To start, create a CSV file that will contain all of your transactions. In the CSV file, each line will represent a `BUY` or `SELL` transaction.  Your transactions **must be in order**, with the oldest transactions coming first, followed by newer transactions coming later. The format is as follows:
 ```csv
-<yyyy-mm-dd>,<description>,<stock_ticker>,<action(BUY/SELL)>,<quantity>,<price>,<commission>,<currency>
+<yyyy-mm-dd>,<description>,<stock_ticker>,<action(BUY/SELL)>,<quantity>,<price>,<commission>,<currency>[,<source>]
 ```
 Here is a sample CSV file:
 ```csv
 # sample.csv
-2017-2-15,ESPP PURCHASE,GOOG,BUY,100,50.00,10.00,USD
-2017-5-20,RSU VEST,GOOG,SELL,50,45.00,0.00,CAD
+2017-2-15,ESPP PURCHASE,GOOG,BUY,100,50.00,10.00,USD,Manual
+2017-5-20,RSU VEST,GOOG,SELL,50,45.00,0.00,CAD,Manual
 ```
 
 **NOTE: This tool only supports calculating ACB and capital gains with transactions

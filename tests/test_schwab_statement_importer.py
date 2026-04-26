@@ -3,10 +3,14 @@ from decimal import Decimal
 
 from capgains.schwab_statement_importer import (
     AcbRow,
+    _extract_rows_from_text_blocks,
+    _infer_split_factor_and_mode,
+    _normalize_split_rows,
     _bucket_line,
     _lines_from_words,
     _parse_money,
     _parse_trade_date,
+    collect_rows_from_dir,
     extract_acb_rows_from_page,
     load_existing_row_keys,
     mark_duplicate_flags,
@@ -24,6 +28,8 @@ def test_parse_trade_date():
     assert _parse_trade_date("06/15/22") == _parse_trade_date("6/15/22")
     d = _parse_trade_date("06/15/2022")
     assert d.year == 2022 and d.month == 6 and d.day == 15
+    d2 = _parse_trade_date("2024-06-20")
+    assert d2.year == 2024 and d2.month == 6 and d2.day == 20
 
 
 def test_parse_money():
@@ -63,6 +69,7 @@ def test_extract_acb_rows_from_page_synthetic_buy():
                     _w(120, 190, 160, 204, "ESPP"),
                     _w(200, 190, 280, 204, "PURCHASE"),
                     _w(360, 190, 400, 204, "$10.00"),
+                    _w(450, 190, 500, 204, "$12.50"),
                     _w(580, 190, 620, 204, "5"),
                 ]
             return (
@@ -78,8 +85,9 @@ def test_extract_acb_rows_from_page_synthetic_buy():
     assert r.ticker == "EXAM"
     assert r.action == "BUY"
     assert r.qty == Decimal(5)
-    assert r.price == Decimal("10.00")
+    assert r.price == Decimal("12.50")
     assert r.currency == "USD"
+    assert r.source == "Manual"
 
 
 def test_extract_acb_rows_from_page_synthetic_sell():
@@ -96,6 +104,7 @@ def test_extract_acb_rows_from_page_synthetic_sell():
                     _w(60, 190, 90, 204, "06/10/22"),
                     _w(120, 190, 160, 204, "SALE"),
                     _w(200, 190, 260, 204, "SOLD"),
+                    _w(450, 190, 500, 204, "$49.50"),
                     _w(580, 190, 620, 204, "2"),
                     _w(670, 190, 710, 204, "$50.00"),
                     _w(720, 190, 780, 204, "$99.00"),
@@ -111,7 +120,7 @@ def test_extract_acb_rows_from_page_synthetic_sell():
     r = rows[0]
     assert r.action == "SELL"
     assert r.qty == Decimal(2)
-    assert r.price == Decimal("50.00")
+    assert r.price == Decimal("49.50")
 
 
 def test_write_acb_csv(tmp_path):
@@ -131,7 +140,9 @@ def test_write_acb_csv(tmp_path):
     write_acb_csv([(r, False) for r in rows], p, with_header=True)
     txt = p.read_text(encoding="utf-8")
     assert "date,description" in txt
+    assert "source" in txt
     assert "EXAM" in txt
+    assert "Manual" in txt
 
 
 def _sample_row():
@@ -190,3 +201,115 @@ def test_resolve_existing_row_keys_force(tmp_path):
     assert len(load_existing_row_keys(p)) == 1
     assert resolve_existing_row_keys(p, force=True) == set()
     assert len(resolve_existing_row_keys(p, force=False)) == 1
+
+
+def test_collect_rows_from_dir_only_account_statement_files(
+    tmp_path,
+    monkeypatch,
+):
+    (tmp_path / "Account Statement_2025-12-31.PDF").write_text("x")
+    (tmp_path / "Account Statement_2026-03-31.PDF").write_text("x")
+    (tmp_path / "Year-end Statement_2025-12-31.PDF").write_text("x")
+    (tmp_path / "Restricted Stock Activity_2025-12-10.PDF").write_text("x")
+
+    parsed = []
+
+    def fake_extract(path, _currency):
+        parsed.append(path.name)
+        return []
+
+    monkeypatch.setattr(
+        "capgains.schwab_statement_importer.extract_acb_rows_from_pdf",
+        fake_extract,
+    )
+    rows = collect_rows_from_dir(tmp_path, "USD", verbose=False)
+    assert rows == []
+    assert parsed == [
+        "Account Statement_2025-12-31.PDF",
+        "Account Statement_2026-03-31.PDF",
+    ]
+
+
+def test_extract_rows_from_text_blocks_vertical_layout():
+    text = (
+        "Stock Transaction Summary: EXAM\n"
+        "Transaction\nDate\nActivity\nDescription\nPurchase/\nVest Date\n"
+        "Purchase\nPrice\nAcquisition\nFMV\nSubscription\nFMV\nShares\n"
+        "Sale\nPrice\nGross\nProceeds\n"
+        "2024-06-20\n18:33:50\nDeposit\nRS 100\n06/19/24\n--\n$135.58\n"
+        "$0.00\n181.0000\n--\n--\n"
+        "Cash Transaction Summary\n"
+    )
+    rows = _extract_rows_from_text_blocks(
+        text,
+        ticker="EXAM",
+        default_currency="USD",
+        source="Account Statement_2024-06-30.PDF",
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.trade_date.isoformat() == "2024-06-20"
+    assert row.description == "Deposit RS 100"
+    assert row.qty == Decimal("181.0000")
+    assert row.price == Decimal("135.58")
+    assert row.source == "Account Statement_2024-06-30.PDF"
+
+
+def test_stock_split_price_is_zero():
+    text = (
+        "Stock Transaction Summary: EXAM\n"
+        "Transaction\nDate\nActivity\nDescription\nPurchase/\nVest Date\n"
+        "Purchase\nPrice\nAcquisition\nFMV\nSubscription\nFMV\nShares\n"
+        "Sale\nPrice\nGross\nProceeds\n"
+        "2024-06-07\n22:03:53\nStock Split\nRS 57039\n06/21/23\n--\n$43.04\n"
+        "$0.00\n1,872.0000\n--\n--\n"
+        "Cash Transaction Summary\n"
+    )
+    rows = _extract_rows_from_text_blocks(
+        text,
+        ticker="EXAM",
+        default_currency="USD",
+        source="Account Statement_2024-06-30.PDF",
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.action == "BUY"
+    assert row.price == Decimal("0")
+
+
+def test_infer_split_factor_added_mode():
+    qty = [Decimal("855"), Decimal("810"), Decimal("81"), Decimal("1872")]
+    factor, mode = _infer_split_factor_and_mode(qty)
+    assert factor == 10
+    assert mode == "added"
+
+
+def test_normalize_split_rows_post_mode_converts_qty():
+    # Post-split totals for a 10:1 split should convert to +shares (x9/10).
+    rows = [
+        AcbRow(
+            trade_date=_parse_trade_date("2024-06-07"),
+            description="Stock Split EXAM",
+            ticker="EXAM",
+            action="BUY",
+            qty=Decimal("1000"),
+            price=Decimal("0"),
+            commission=Decimal("0"),
+            currency="USD",
+            source="a.pdf",
+        ),
+        AcbRow(
+            trade_date=_parse_trade_date("2024-06-07"),
+            description="Stock Split EXAM",
+            ticker="EXAM",
+            action="BUY",
+            qty=Decimal("2000"),
+            price=Decimal("0"),
+            commission=Decimal("0"),
+            currency="USD",
+            source="a.pdf",
+        ),
+    ]
+    normalized = _normalize_split_rows(rows, verbose=False)
+    assert normalized[0].qty == Decimal("900")
+    assert normalized[1].qty == Decimal("1800")

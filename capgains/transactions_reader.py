@@ -21,6 +21,18 @@ class TransactionsReader:
         "commission",
         "currency"
     ]
+    source_column = "source"
+
+    @classmethod
+    def _is_header_row(cls, entry):
+        """Return true when row looks like CSV header."""
+        cols = [x.strip().lower() for x in entry]
+        base = cls.columns
+        if len(cols) == len(base):
+            return cols == base
+        if len(cols) == len(base) + 1:
+            return cols == base + [cls.source_column]
+        return False
 
     @classmethod
     def get_transactions(cls, csv_file):
@@ -31,16 +43,25 @@ class TransactionsReader:
                 reader = csv.reader(f)
                 last_date = None
                 for entry_no, entry in enumerate(reader):
+                    if entry_no == 0 and cls._is_header_row(entry):
+                        continue
                     actual_num_columns = len(entry)
                     expected_num_columns = len(cls.columns)
-                    if actual_num_columns != expected_num_columns:
-                        # Each line in the CSV file should have the same number
-                        # of columns as we expect
+                    expected_with_source = expected_num_columns + 1
+                    if actual_num_columns not in (
+                        expected_num_columns,
+                        expected_with_source,
+                    ):
+                        # Accept legacy 8-column CSVs and optional source
+                        # (9th) column; reject everything else.
                         raise ClickException(
-                            "Transaction entry {}: expected {} columns, entry has {}"  # noqa: E501
+                            "Transaction entry {}: expected {} or {} columns, entry has {}"  # noqa: E501
                             .format(entry_no,
                                     expected_num_columns,
+                                    expected_with_source,
                                     actual_num_columns))
+                    if actual_num_columns == expected_with_source:
+                        entry = entry[:expected_num_columns]
                     date_idx = cls.columns.index("date")
                     date_str = entry[date_idx]
                     try:
