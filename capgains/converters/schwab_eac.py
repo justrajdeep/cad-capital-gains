@@ -112,6 +112,13 @@ def convert_schwab_transaction(tx, tickers=None):
                     price = convert_schwab_amount(vest_price)
                     break
 
+    # Guard: Sale must have a non-zero price
+    if action == 'SELL' and price == Decimal('0'):
+        raise ValueError(
+            f"Sale on {tx['Date']}: could not determine sale price "
+            "from TransactionDetails"
+        )
+
     # For consistency with manual data, set commission to 0
     commission = Decimal('0')
 

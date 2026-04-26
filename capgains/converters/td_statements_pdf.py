@@ -449,9 +449,9 @@ def extract_statement_transactions(text, account_type):
     # Extract year from the statement header
     year_pattern = r"Your investment account statement.*?(\d{4})"
     year_match = re.search(year_pattern, text, re.DOTALL)
-    year = year_match.group(
-        1
-    ) if year_match else "2024"  # Default to 2024 if not found
+    if not year_match:
+        raise ValueError("Could not extract year from statement header")
+    year = year_match.group(1)
 
     # Find the activity section - handle different formats
     activity_pattern = (
@@ -916,7 +916,7 @@ def extract_transactions_from_pdf(pdf_path):
                     tx['source'] = os.path.basename(
                         pdf_path
                     )  # Track source file
-                    transactions.extend([tx])
+                    transactions.append(tx)
 
     except Exception as e:
         raise ClickException(
@@ -1047,8 +1047,8 @@ def clean_transactions(transactions, include_exchange_rate=False):
 
         # Add transactions in the order that maintains positive share balance
         ordered_transactions.extend(buys)
-        ordered_transactions.extend(journal_outs)
         ordered_transactions.extend(journal_ins)
+        ordered_transactions.extend(journal_outs)
         ordered_transactions.extend(sells)
 
     # Convert to output format
@@ -1175,6 +1175,7 @@ def convert_td_statements_directory(
         aliases_file: Optional path to a ticker aliases config file
     """
     # Load custom ticker aliases if provided
+    original_aliases = TICKER_ALIASES
     if aliases_file:
         global TICKER_ALIASES
         TICKER_ALIASES = load_ticker_aliases(aliases_file)
@@ -1204,6 +1205,11 @@ def convert_td_statements_directory(
                 statement_transactions = extract_transactions_from_pdf(
                     file_path
                 )
+                if not statement_transactions:
+                    print(
+                        f"WARNING: no transactions extracted from {file_path}",
+                        file=sys.stderr
+                    )
                 all_transactions.extend(statement_transactions)
 
         # Process confirmations
@@ -1218,6 +1224,11 @@ def convert_td_statements_directory(
                 confirmation_transactions = extract_confirmation_transactions(
                     file_path
                 )
+                if not confirmation_transactions:
+                    print(
+                        f"WARNING: no transactions extracted from {file_path}",
+                        file=sys.stderr
+                    )
                 all_transactions.extend(confirmation_transactions)
 
         if not all_transactions:
@@ -1245,3 +1256,5 @@ def convert_td_statements_directory(
 
     except Exception as e:
         raise ClickException(str(e))
+    finally:
+        TICKER_ALIASES = original_aliases

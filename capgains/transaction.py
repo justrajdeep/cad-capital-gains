@@ -111,7 +111,7 @@ class Transaction:
 
     @superficial_loss.setter
     def superficial_loss(self, superficial_loss):
-        self._superficial_loss = Decimal(superficial_loss)
+        self._superficial_loss = bool(superficial_loss)
 
     @property
     def expenses(self):

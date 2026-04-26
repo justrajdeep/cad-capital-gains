@@ -131,6 +131,10 @@ def convert_t5008_to_transactions(entries, ticker_map=None):
 
         date_str = entry['date'].isoformat()
         qty = entry['qty']
+        if qty == 0:
+            raise ClickException(
+                f"T5008 entry for '{entry['security_name']}' has zero quantity"
+            )
         cost_per_share = entry['cost'] / qty
         proceeds_per_share = entry['proceeds'] / qty
 
