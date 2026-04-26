@@ -260,10 +260,11 @@ class TransactionsReader:
 
                 action_idx = cls.columns.index("action")
                 action = entry[action_idx].strip().upper()
-                if action not in ('BUY', 'SELL'):
+                valid_actions = ('BUY', 'SELL', 'JOURNAL', 'JOURNAL_IN', 'JOURNAL_OUT')
+                if action not in valid_actions:
                     msg = (
                         f"The action entered ({entry[action_idx]}) is not "
-                        "valid. Must be 'BUY' or 'SELL'"
+                        f"valid. Must be one of {', '.join(valid_actions)}"
                     )
                     raise ClickException(msg)
                 entry[action_idx] = action

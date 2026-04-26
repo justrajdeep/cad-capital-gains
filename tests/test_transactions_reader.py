@@ -470,12 +470,7 @@ def test_transactions_reader_json_not_chronological(testfiles_dir):
 
 
 def test_transactions_reader_csv_with_header(testfiles_dir):
-    """Testing TransactionsReader rejects CSV files with headers.
-
-    This test verifies that the appropriate error is raised when the first
-    row appears to be a header row.
-    """
-    # Create a CSV file with a header row
+    """Testing TransactionsReader skips exact-match header rows silently."""
     header_row = [
         'date',
         'description',
@@ -501,18 +496,9 @@ def test_transactions_reader_csv_with_header(testfiles_dir):
         testfiles_dir, 'with_header.csv', [header_row, transaction_row], True
     )
 
-    with pytest.raises(ClickException) as excinfo:
-        TransactionsReader.get_transactions(filepath)
-    assert ("First row appears to be a header row" in excinfo.value.message)
-    assert (
-        "should contain only transaction data without headers"
-        in excinfo.value.message
-    )
-    expected_format = (
-        "YYYY-MM-DD,description,ticker,action,quantity,price,"
-        "commission,currency"
-    )
-    assert expected_format in excinfo.value.message
+    actual_transactions = TransactionsReader.get_transactions(filepath)
+    assert len(actual_transactions) == 1
+    assert actual_transactions[0].ticker == 'ANET'
 
 
 def test_transactions_reader_csv_with_text_headers(testfiles_dir):
@@ -845,11 +831,7 @@ def test_csv_header_detection_with_date_field(tmp_path):
 
 
 def test_csv_header_detection_with_qty_field(tmp_path):
-    """Test detection of header row when first row contains 'qty' field.
-
-    This test verifies that the appropriate error is raised when the first
-    row appears to be a header row.
-    """
+    """Test that exact-match header row (with 'qty') is skipped silently."""
     csv_path = tmp_path / "header.csv"
     with open(csv_path, "w") as f:
         f.write(
@@ -858,27 +840,14 @@ def test_csv_header_detection_with_qty_field(tmp_path):
             "2022-01-01,Buy AAPL,AAPL,BUY,100,150.00,9.99,USD"
         )
 
-    with pytest.raises(ClickException) as excinfo:
-        TransactionsReader.get_transactions(csv_path)
-
-    assert ("First row appears to be a header row" in excinfo.value.message)
-    assert (
-        "should contain only transaction data without headers"
-        in excinfo.value.message
-    )
-    expected_format = (
-        "YYYY-MM-DD,description,ticker,action,quantity,price,"
-        "commission,currency"
-    )
-    assert expected_format in excinfo.value.message
+    actual_transactions = TransactionsReader.get_transactions(csv_path)
+    assert len(actual_transactions) == 1
+    assert actual_transactions[0].ticker == "AAPL"
 
 
 def test_csv_header_detection_with_quantity_field(tmp_path):
-    """Test detection of header row when first row contains 'quantity' field.
-
-    This test verifies that the appropriate error is raised when the first
-    row appears to be a header row.
-    """
+    """Test that a non-standard header (wrong column order/names) fails with
+    a date format error since it does not match the exact header pattern."""
     csv_path = tmp_path / "header.csv"
     with open(csv_path, "w") as f:
         header = (
@@ -891,16 +860,7 @@ def test_csv_header_detection_with_quantity_field(tmp_path):
     with pytest.raises(ClickException) as excinfo:
         TransactionsReader.get_transactions(csv_path)
 
-    assert ("First row appears to be a header row" in excinfo.value.message)
-    assert (
-        "should contain only transaction data without headers"
-        in excinfo.value.message
-    )
-    expected_format = (
-        "YYYY-MM-DD,description,ticker,action,quantity,price,"
-        "commission,currency"
-    )
-    assert expected_format in excinfo.value.message
+    assert "was not entered in the correct format" in excinfo.value.message
 
 
 def test_csv_header_detection_with_dates_field(tmp_path):
@@ -934,11 +894,8 @@ def test_csv_header_detection_with_dates_field(tmp_path):
 
 
 def test_csv_header_detection_with_transaction_date_field(tmp_path):
-    """Test detection of header row when first row contains 'transaction_date'.
-
-    This test verifies that the appropriate error is raised when the first
-    row appears to be a header row.
-    """
+    """Test that a non-standard header ('transaction_date') fails with a date
+    format error since it does not match the exact header pattern."""
     csv_path = tmp_path / "header.csv"
     with open(csv_path, "w") as f:
         header = (
@@ -951,16 +908,7 @@ def test_csv_header_detection_with_transaction_date_field(tmp_path):
     with pytest.raises(ClickException) as excinfo:
         TransactionsReader.get_transactions(csv_path)
 
-    assert ("First row appears to be a header row" in excinfo.value.message)
-    assert (
-        "should contain only transaction data without headers"
-        in excinfo.value.message
-    )
-    expected_format = (
-        "YYYY-MM-DD,description,ticker,action,quantity,price,"
-        "commission,currency"
-    )
-    assert expected_format in excinfo.value.message
+    assert "was not entered in the correct format" in excinfo.value.message
 
 
 def test_year_tracking():

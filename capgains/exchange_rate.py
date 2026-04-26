@@ -106,9 +106,21 @@ class ExchangeRate:
         try:
             for day_rate in rates_json:
                 date_str = day_rate[self.date]
-                rate_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-                rate = Decimal(day_rate[forex_str][self.value])
+                try:
+                    rate_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                except ValueError:
+                    raise ClickException(
+                        "Error parsing exchange rate from Bank of Canada API"
+                    )
+                try:
+                    rate = Decimal(day_rate[forex_str][self.value])
+                except (KeyError, InvalidOperation):
+                    raise ClickException(
+                        "Error parsing exchange rate from Bank of Canada API"
+                    )
                 rates[rate_date] = rate
+        except ClickException:
+            raise
         except KeyError as e:
             raise ClickException(
                 "Unexpected response format from Bank of Canada API: "

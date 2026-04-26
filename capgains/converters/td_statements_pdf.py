@@ -1175,9 +1175,9 @@ def convert_td_statements_directory(
         aliases_file: Optional path to a ticker aliases config file
     """
     # Load custom ticker aliases if provided
+    global TICKER_ALIASES
     original_aliases = TICKER_ALIASES
     if aliases_file:
-        global TICKER_ALIASES
         TICKER_ALIASES = load_ticker_aliases(aliases_file)
 
     all_transactions = []

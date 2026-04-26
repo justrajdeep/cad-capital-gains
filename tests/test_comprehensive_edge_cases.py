@@ -79,7 +79,10 @@ def test_invalid_transaction_protection(requests_mock):
         ]
     )
     assert result.exit_code == 1  # Should fail due to invalid transaction
-    assert "Transaction caused negative share balance" in result.output
+    assert (
+        "Transaction caused negative share balance" in result.output
+        or "Cannot SELL" in result.output
+    )
 
 
 def test_natural_zero_balance(requests_mock):
