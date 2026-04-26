@@ -2,7 +2,9 @@ name: Build
 
 on:
   push:
-    branches: master
+    branches:
+      - master
+      - dev/acooke-additions-schwab-td-norberts
   pull_request:
 
 jobs:
@@ -31,7 +33,7 @@ jobs:
       run: uv run pytest --cov-report term --cov=capgains tests/
 
     - name: Run linter
-      run: uv run flake8
+      run: uv run flake8 capgains tests
 
     - name: Upload coverage reports to Codecov with GitHub Action
       uses: codecov/codecov-action@v5

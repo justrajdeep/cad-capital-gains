@@ -18,22 +18,26 @@ uv run yapf --in-place --recursive --parallel -vv .
 
 Then run flake8 to check for any remaining style issues:
 ```bash
-uv run flake8
+uv run flake8 capgains tests
 ```
 
 ## Running tests manually
-We have a Travis CI setup that will run the test suite, perfrom python linting, and verify the code has full testing coverage for every commit you push. This project also uses GitHub Actions with `uv`. Your code will need to pass these checks in order to get merged in. You can also running these checks manually before you push your code out as well:
+GitHub Actions runs the test suite, Python linting, and coverage on pushes and
+pull requests (see `.github/workflows/`). Your code will need to pass these
+checks to merge. You can run the same checks locally before you push:
 ```bash
 # Run the test suite manually using your system's default python version:
 uv run pytest --cov-report term --cov=capgains tests/
 
 # Run the linter against the project's default python version
-uv run flake8
+uv run flake8 capgains tests
 
-# Run the test suite against all the supported python versions
-# and the linter in an isolated environment. You will need to
-# have the supported python versions installed otherwise you
-# will get a `InterpreterNotFoundError`
+# Linter only via tox (does not run the pytest matrix)
+uv run tox -e flake8
+
+# Run the test suite on each supported Python version, then flake8.
+# You need those interpreters installed or you will get
+# `InterpreterNotFoundError` (use `tox -e flake8` for lint only).
 uv run tox
 ```
 
