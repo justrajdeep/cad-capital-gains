@@ -75,7 +75,8 @@ class ExchangeRate:
         url = "{}/{}/json".format(self.valet_obs_url, forex_str)
         response = None
         try:
-            response = requests.get(url=url, params=params)
+            response = requests.get(url=url, params=params, timeout=10)
+            response.raise_for_status()
             rates_json = response.json()[self.observations]
         except requests.ConnectionError as e:
             raise ClickException(
@@ -102,24 +103,17 @@ class ExchangeRate:
                     self._currency_from
                 )
             )
-
         try:
             for day_rate in rates_json:
                 date_str = day_rate[self.date]
-                try:
-                    date = datetime.strptime(date_str, '%Y-%m-%d').date()
-                except ValueError:
-                    msg = "Error parsing exchange rate from Bank of Canada API"
-                    raise ClickException(msg)
-                try:
-                    rate = Decimal(day_rate[forex_str][self.value])
-                except (KeyError, InvalidOperation):
-                    msg = "Error parsing exchange rate from Bank of Canada API"
-                    raise ClickException(msg)
-                rates[date] = rate
-        except Exception:
-            msg = "Error parsing exchange rate from Bank of Canada API"
-            raise ClickException(msg)
+                rate_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                rate = Decimal(day_rate[forex_str][self.value])
+                rates[rate_date] = rate
+        except KeyError as e:
+            raise ClickException(
+                "Unexpected response format from Bank of Canada API: "
+                "missing field {}".format(e)
+            )
         return rates
 
     def _fetch_noon_rates(self, start_date, end_date):

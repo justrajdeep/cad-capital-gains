@@ -205,13 +205,14 @@ The tool supports both CSV and JSON input formats for transaction data.
 ## CSV Format
 Create a CSV file with each line representing a `BUY` or `SELL` transaction. Transactions **must be in chronological order**. The format is:
 ```csv
-<yyyy-mm-dd>,<description>,<stock_ticker>,<action(BUY/SELL)>,<quantity>,<price>,<commission>,<currency>
+<yyyy-mm-dd>,<description>,<stock_ticker>,<action(BUY/SELL)>,<quantity>,<price>,<commission>,<currency>[,<source>]
 ```
 
 Example:
 ```csv
-2017-2-15,ESPP PURCHASE,GOOG,BUY,100,50.00,10.00,USD
-2017-5-20,RSU VEST,GOOG,SELL,50,45.00,0.00,CAD
+# sample.csv
+2017-2-15,ESPP PURCHASE,GOOG,BUY,100,50.00,10.00,USD,Manual
+2017-5-20,RSU VEST,GOOG,SELL,50,45.00,0.00,CAD,Manual
 ```
 
 ## JSON Format

@@ -22,6 +22,18 @@ class TransactionsReader:
         "commission",
         "currency"
     ]
+    source_column = "source"
+
+    @classmethod
+    def _is_header_row(cls, entry):
+        """Return true when row looks like CSV header."""
+        cols = [x.strip().lower() for x in entry]
+        base = cls.columns
+        if len(cols) == len(base):
+            return cols == base
+        if len(cols) == len(base) + 1:
+            return cols == base + [cls.source_column]
+        return False
 
     @classmethod
     def get_transactions(cls, input_file):
@@ -160,44 +172,32 @@ class TransactionsReader:
                 if not any(entry):
                     continue
 
+                # Skip header row
+                if entry_no == 0 and cls._is_header_row(entry):
+                    continue
+
                 actual_num_columns = len(entry)
                 expected_num_columns = len(cls.columns)
-                if actual_num_columns != expected_num_columns:
-                    # Each line in the CSV file should have the same number
-                    # of columns as we expect
+                expected_with_source = expected_num_columns + 1
+                if actual_num_columns not in (
+                    expected_num_columns,
+                    expected_with_source,
+                ):
                     fmt = (
-                        "Transaction entry {}: expected {} columns, "
+                        "Transaction entry {}: expected {} or {} columns, "
                         "entry has {}"
                     )
                     msg = fmt.format(
-                        entry_no, expected_num_columns, actual_num_columns
+                        entry_no,
+                        expected_num_columns,
+                        expected_with_source,
+                        actual_num_columns
                     )
                     raise ClickException(msg)
 
-                # Check for potential header row
-                if entry_no == 0:
-                    potential_headers = [field.lower() for field in entry]
-                    header_fields = [
-                        'date',
-                        'description',
-                        'ticker',
-                        'action',
-                        'quantity',
-                        'qty',
-                        'price'
-                    ]
-                    header_match = any(
-                        col in potential_headers for col in header_fields
-                    )
-                    if header_match:
-                        fmt = (
-                            "First row appears to be a header row. The "
-                            "CSV file should contain only transaction data "
-                            "without headers.\nEach row should be in the "
-                            "format: YYYY-MM-DD,description,ticker,action,"
-                            "quantity,price,commission,currency"
-                        )
-                        raise ClickException(fmt)
+                # Strip optional source column
+                if actual_num_columns == expected_with_source:
+                    entry = entry[:expected_num_columns]
 
                 date_idx = cls.columns.index("date")
                 date_str = entry[date_idx]
@@ -257,6 +257,16 @@ class TransactionsReader:
                         "is not a valid number"
                     )
                     raise ClickException(msg)
+
+                action_idx = cls.columns.index("action")
+                action = entry[action_idx].strip().upper()
+                if action not in ('BUY', 'SELL'):
+                    msg = (
+                        f"The action entered ({entry[action_idx]}) is not "
+                        "valid. Must be 'BUY' or 'SELL'"
+                    )
+                    raise ClickException(msg)
+                entry[action_idx] = action
 
                 transaction = Transaction(*entry)
                 if last_date and transaction.date < last_date:

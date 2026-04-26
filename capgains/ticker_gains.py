@@ -51,7 +51,7 @@ class TickerGains:
             return False
         # Has to have a positive share balance after 30 days
         transaction_idx = filtered_transactions.index(transaction)
-        balance = transaction._share_balance
+        balance = transaction.share_balance
         for window_transaction in filtered_transactions[transaction_idx + 1:]:
             if window_transaction.action == 'SELL':
                 balance -= window_transaction.qty
@@ -101,6 +101,20 @@ class TickerGains:
             capital_gain = Decimal(0.0)
             self._total_acb += acb
         if self._share_balance < 0:
+            if transaction.action == "SELL":
+                balance_before = self._share_balance + transaction.qty
+                raise ClickException(
+                    "Cannot SELL {qty} {ticker} on {d}: that exceeds shares "
+                    "on hand (you had {had} sh before this line). The CSV is "
+                    "likely missing an earlier BUY for this ticker, or a "
+                    "SELL is duplicated. "
+                    .format(
+                        qty=format(transaction.qty, "f"),
+                        ticker=transaction.ticker,
+                        d=transaction.date.isoformat(),
+                        had=format(balance_before, "f"),
+                    )
+                )
             raise ClickException("Transaction caused negative share balance")
         transaction.share_balance = self._share_balance
         transaction.proceeds = proceeds

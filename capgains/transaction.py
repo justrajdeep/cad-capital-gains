@@ -115,6 +115,8 @@ class Transaction:
 
     @property
     def expenses(self):
+        if self._exchange_rate is None:
+            raise ValueError("exchange_rate must be set before accessing expenses")
         return self.commission * self.exchange_rate
 
     def set_superficial_loss(self):

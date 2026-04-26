@@ -57,16 +57,86 @@ def test_transactions_reader_columns_error(testfiles_dir, create_file):
         'USD'
     )
     transactions = transactions_to_list([transaction])
-    # Add an extra column to the transaction
+    # Add two extra columns to the transaction (10 total columns)
     transactions[0].append('EXTRA_COLUMN_VALUE')
-    ext = '.json' if create_file == create_json_file else '.csv'
-    filepath = create_file(
-        testfiles_dir, f"too_many_cols{ext}", transactions, True
-    )
+    transactions[0].append('SECOND_EXTRA_COLUMN_VALUE')
+    filepath = create_csv_file(testfiles_dir,
+                               "too_many_cols.csv",
+                               transactions,
+                               True)
     with pytest.raises(ClickException) as excinfo:
         TransactionsReader.get_transactions(filepath)
-    error_msg = ("Transaction entry 0: expected 8 columns, entry has 9")
-    assert excinfo.value.message == error_msg
+    assert excinfo.value.message == "Transaction entry 0: expected 8 or 9 columns, entry has 10"  # noqa: E501
+
+
+def test_transactions_reader_source_column_is_accepted(testfiles_dir):
+    """Testing TransactionsReader with optional 9th source column"""
+    transaction = Transaction(date(2018, 2, 15),
+                              'ESPP PURCHASE',
+                              'ANET',
+                              'BUY',
+                              21,
+                              307.96,
+                              20.99,
+                              'USD')
+    transactions = transactions_to_list([transaction])
+    transactions[0].append('statement.pdf')
+    filepath = create_csv_file(testfiles_dir,
+                               "with_source_col.csv",
+                               transactions,
+                               True)
+
+    actual_transactions = TransactionsReader.get_transactions(filepath)
+    assert len(actual_transactions) == 1
+
+
+def test_transactions_reader_header_row_is_skipped(testfiles_dir):
+    """Testing TransactionsReader with 8-column header row"""
+    rows = [
+        ["date", "description", "ticker", "action", "qty",
+         "price", "commission", "currency"],
+        ["2018-02-15", "ESPP PURCHASE", "ANET", "BUY",
+         "21", "307.96", "20.99", "USD"],
+    ]
+    filepath = create_csv_file(testfiles_dir,
+                               "with_header.csv",
+                               rows,
+                               True)
+    actual_transactions = TransactionsReader.get_transactions(filepath)
+    assert len(actual_transactions) == 1
+    assert actual_transactions[0].ticker == "ANET"
+
+
+def test_transactions_reader_header_row_with_source_is_skipped(testfiles_dir):
+    """Testing TransactionsReader with 9-column header row"""
+    rows = [
+        ["date", "description", "ticker", "action", "qty",
+         "price", "commission", "currency", "source"],
+        ["2018-02-15", "ESPP PURCHASE", "ANET", "BUY",
+         "21", "307.96", "20.99", "USD", "Manual"],
+    ]
+    filepath = create_csv_file(testfiles_dir,
+                               "with_header_source.csv",
+                               rows,
+                               True)
+    actual_transactions = TransactionsReader.get_transactions(filepath)
+    assert len(actual_transactions) == 1
+    assert actual_transactions[0].ticker == "ANET"
+
+
+def test_transactions_reader_action_case_and_whitespace_normalized(testfiles_dir):
+    """Testing TransactionsReader normalizes action casing/spacing."""
+    rows = [
+        ["2018-02-15", "ESPP PURCHASE", "ANET", " buy ",
+         "10", "201.0", "0.0", "USD"],
+    ]
+    filepath = create_csv_file(testfiles_dir,
+                               "transactions_action_normalized.csv",
+                               rows,
+                               True)
+    actual_transactions = TransactionsReader.get_transactions(filepath)
+    assert len(actual_transactions) == 1
+    assert actual_transactions[0].action == "BUY"
 
 
 @pytest.mark.parametrize("create_file", [create_csv_file, create_json_file])

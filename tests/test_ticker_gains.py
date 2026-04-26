@@ -221,7 +221,9 @@ def test_ticker_gains_negative_balance(transactions, exchange_rates_mock):
     er_map = {'USD': er}
     with pytest.raises(ClickException) as excinfo:
         tg.add_transactions([sell_transaction], er_map)
-    assert excinfo.value.message == "Transaction caused negative share balance"
+    err = str(excinfo.value)
+    assert "exceeds shares" in err
+    assert "missing an earlier BUY" in err
 
 
 def test_ticker_gains_ok(transactions, exchange_rates_mock):

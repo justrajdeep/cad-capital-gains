@@ -41,9 +41,11 @@ Repository = "https://github.com/EmilMaric/cad-capital-gains"
 
 [project.scripts]
 capgains = "capgains.cli:capgains"
+statements-to-acb = "capgains.statements_importer:main"
 
 [tool.uv]
-default-groups = ["dev"]
+# So `uv sync` / `uv run` include PyMuPDF without `uv run --group pdf ...`
+default-groups = ["dev", "pdf"]
 
 [dependency-groups]
 dev = [
@@ -54,6 +56,9 @@ dev = [
     "pytest-cov>=6.1.1,<7.0.0",
     "flake8-pyproject>=1.2.3,<2.0.0",
     "yapf>=0.43.0,<0.50.0",
+]
+pdf = [
+    "pymupdf>=1.27.2.3",
 ]
 
 [build-system]

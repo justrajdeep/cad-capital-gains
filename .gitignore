@@ -1,12 +1,19 @@
 # Python
 __pycache__/
+*.py[cod]
+*$py.class
 *.pyc
-*.egg-info/
+*.egg-info
+build/
+.mypy_cache/
+.ruff_cache/
 
 # Testing
 .pytest_cache/
 .tox/
 .coverage*
+coverage.xml
+htmlcov/
 
 # Environment
 .python-version
@@ -24,5 +31,18 @@ __pycache__/
 # Virtual environment
 .venv/
 
-# Python dist folder
+# Python dist / wheels
 dist/
+
+# Local env / secrets
+.env
+.env.*
+
+# Cursor / local IDE metadata
+.specstory/
+.idea/
+
+# Editor backups
+*~
+*.swp
+*.swo
