@@ -25,6 +25,18 @@ Word = Tuple[float, float, float, float, str, int, int, int]
 # pages; words are bucketed into [lo, hi) ranges.
 _X_BOUNDS = (0, 95, 180, 265, 345, 405, 475, 555, 635, 705, 1200)
 
+# Named indices into the list produced by _bucket_line() for each PDF row.
+_COL_DATE           = 0
+_COL_ACTIVITY       = 1
+_COL_DESC           = 2
+# index 3 = purchase/vest date (not used)
+_COL_PURCHASE_PRICE = 4
+_COL_ACQ_FMV        = 5
+# index 6 = subscription FMV (not used)
+_COL_SHARES         = 7
+_COL_SALE_PRICE     = 8
+_COL_PROCEEDS       = 9
+
 _DATE_RE = re.compile(
     r"^\s*(\d{1,2})/(\d{1,2})/(\d{2,4})\s*$"
 )
@@ -47,6 +59,7 @@ _ETRADE_ROW_RE = re.compile(
 # Marks duplicate rows in the CSV (description) and in the terminal
 _DUP_PREFIX = "[DUPLICATE] "
 _DUP_STAMP_RE = re.compile(r"^\[DUPLICATE\]\s*", re.IGNORECASE)
+# Standard stock split ratios to test when inferring split factor (2:1 through 10:1).
 _COMMON_SPLIT_FACTORS = (2, 3, 4, 5, 10)
 
 
@@ -598,14 +611,14 @@ def extract_acb_rows_from_page(
             continue
 
         row = _row_from_stock_fields(
-            trade_date_str=cols[0],
-            activity=cols[1],
-            desc=cols[2],
-            purchase_price_str=cols[4],
-            acq_fmv_str=cols[5],
-            shares_str=cols[7],
-            sale_price_str=cols[8],
-            proceeds_str=cols[9],
+            trade_date_str=cols[_COL_DATE],
+            activity=cols[_COL_ACTIVITY],
+            desc=cols[_COL_DESC],
+            purchase_price_str=cols[_COL_PURCHASE_PRICE],
+            acq_fmv_str=cols[_COL_ACQ_FMV],
+            shares_str=cols[_COL_SHARES],
+            sale_price_str=cols[_COL_SALE_PRICE],
+            proceeds_str=cols[_COL_PROCEEDS],
             ticker=ticker,
             default_currency=default_currency,
             source=source,

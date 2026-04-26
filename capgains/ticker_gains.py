@@ -39,7 +39,7 @@ class TickerGains:
             return False
         # Has to have a positive share balance after 30 days
         transaction_idx = filtered_transactions.index(transaction)
-        balance = transaction._share_balance
+        balance = transaction.share_balance
         for window_transaction in filtered_transactions[transaction_idx+1:]:
             if window_transaction.action == 'SELL':
                 balance -= window_transaction.qty

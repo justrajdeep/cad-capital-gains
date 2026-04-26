@@ -101,10 +101,12 @@ class Transaction:
 
     @superficial_loss.setter
     def superficial_loss(self, superficial_loss):
-        self._superficial_loss = Decimal(superficial_loss)
+        self._superficial_loss = bool(superficial_loss)
 
     @property
     def expenses(self):
+        if self._exchange_rate is None:
+            raise ValueError("exchange_rate must be set before accessing expenses")
         return self.commission * self.exchange_rate
 
     def set_superficial_loss(self):

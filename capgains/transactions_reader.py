@@ -96,6 +96,13 @@ class TransactionsReader:
                         raise ClickException(
                             "The commission entered {} is not a valid number"
                             .format(commission_str))
+                    action_idx = cls.columns.index("action")
+                    action = entry[action_idx].strip().upper()
+                    if action not in ('BUY', 'SELL'):
+                        raise ClickException(
+                            "The action entered ({}) is not valid. Must be 'BUY' or 'SELL'"
+                            .format(entry[action_idx]))
+                    entry[action_idx] = action
                     transaction = Transaction(*entry)
                     if last_date:
                         if transaction.date < last_date:

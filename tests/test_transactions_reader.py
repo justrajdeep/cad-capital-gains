@@ -107,6 +107,21 @@ def test_transactions_reader_header_row_with_source_is_skipped(testfiles_dir):
     assert actual_transactions[0].ticker == "ANET"
 
 
+def test_transactions_reader_action_case_and_whitespace_normalized(testfiles_dir):
+    """Testing TransactionsReader normalizes action casing/spacing."""
+    rows = [
+        ["2018-02-15", "ESPP PURCHASE", "ANET", " buy ",
+         "10", "201.0", "0.0", "USD"],
+    ]
+    filepath = create_csv_file(testfiles_dir,
+                               "transactions_action_normalized.csv",
+                               rows,
+                               True)
+    actual_transactions = TransactionsReader.get_transactions(filepath)
+    assert len(actual_transactions) == 1
+    assert actual_transactions[0].action == "BUY"
+
+
 def test_transactions_reader_file_not_found_error(testfiles_dir):
     """Testing TransactionsReader with a non-existent file"""
     with pytest.raises(ClickException) as excinfo:
