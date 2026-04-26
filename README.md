@@ -13,6 +13,10 @@ Calculating your capital gains and tracking your adjusted cost base (ACB) manual
     - There is a non-zero balance of shares sharing the same ticker at the end of the 61 day window (30 days after the sale)
 - Outputs the running adjusted cost base (ACB) for every transaction with a non-superficial capital gain/loss
 - Supports fractional quantities of shares
+- Supports brokerage PDF import via `statements-to-acb` for:
+    - Schwab: `Account Statement_*.PDF`
+    - E*TRADE: `ClientStatements_*.pdf`
+    - Interactive Brokers: `U<account>_<yyyymmdd>_<yyyymmdd>.pdf` (stock trades in `Trades` -> `Stocks`)
 
 # Installation
 ```bash
@@ -23,14 +27,17 @@ uv tool install cad-capgains
 uvx cad-capgains --help
 ```
 
-## Schwab account statement PDFs (optional)
+## Brokerage statement PDFs (optional)
 
 This repo includes an importer wrapper for brokerage PDF statements. Point it
 to a folder and it auto-detects supported files:
 - `Account Statement_*.PDF` (Schwab)
 - `ClientStatements_*.pdf` (E*TRADE)
+- `U<account>_<yyyymmdd>_<yyyymmdd>.pdf` (Interactive Brokers activity statements)
 
 It writes a CSV compatible with `capgains` and includes a `source` column.
+For Interactive Brokers files, the current parser targets stock trades from
+the `Trades` -> `Stocks` sections.
 
 From a git checkout, run:
 
@@ -48,6 +55,15 @@ For Schwab imports, the CSV `price` column is taken from the statement's
 **Acquisition FMV** value.
 Exception: `Stock Split` rows are emitted with `price=0` so split events do
 not artificially increase ACB.
+
+**In-kind position transfers (e.g. Schwab to IBKR):** Schwab
+*Stock Transaction Summary* rows whose **Activity** is `Transfer` are
+**omitted** from the import (not a new purchase, not a market sale, and
+you keep your existing ACB). IBKR **FOP / ACAT** in-kind deposits appear in
+the **Transfers** section; they are **not** added as new `BUY` rows, so
+you do not double-count the same shares when you mix broker PDFs in one
+run. Rely on your lot history; add manual `BUY`/`SELL` lines only if you
+need a single CSV to model the move in a way your advisor recommends.
 
 For stock splits, the importer also applies split-aware quantity handling:
 it infers the split factor/mode from statement rows and normalizes split

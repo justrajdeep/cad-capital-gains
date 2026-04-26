@@ -66,6 +66,20 @@ class TickerGains:
             capital_gain = Decimal(0.0)
             self._total_acb += acb
         if self._share_balance < 0:
+            if transaction.action == "SELL":
+                balance_before = self._share_balance + transaction.qty
+                raise ClickException(
+                    "Cannot SELL {qty} {ticker} on {d}: that exceeds shares "
+                    "on hand (you had {had} sh before this line). The CSV is "
+                    "likely missing an earlier BUY for this ticker, or a "
+                    "SELL is duplicated. "
+                    .format(
+                        qty=format(transaction.qty, "f"),
+                        ticker=transaction.ticker,
+                        d=transaction.date.isoformat(),
+                        had=format(balance_before, "f"),
+                    )
+                )
             raise ClickException("Transaction caused negative share balance")
         transaction.share_balance = self._share_balance
         transaction.proceeds = proceeds

@@ -3,12 +3,17 @@ from decimal import Decimal
 
 from capgains.statements_importer import (
     AcbRow,
+    _acbs_from_etrade_espp_confirmation_text,
+    _acbs_from_etrade_rsu_release_text,
+    _etrade_stmt_line_is_sell_to_cover_tax,
     _extract_rows_from_etrade_section,
+    _extract_rows_from_ibkr_stocks_trades_section,
     _extract_rows_from_text_blocks,
     _infer_split_factor_and_mode,
     _normalize_split_rows,
     _bucket_line,
     _lines_from_words,
+    _row_from_stock_fields,
     _parse_money,
     _parse_trade_date,
     collect_rows_from_dir,
@@ -31,12 +36,32 @@ def test_parse_trade_date():
     assert d.year == 2022 and d.month == 6 and d.day == 15
     d2 = _parse_trade_date("2024-06-20")
     assert d2.year == 2024 and d2.month == 6 and d2.day == 20
+    d3 = _parse_trade_date("3-15-2024")
+    assert d3.year == 2024 and d3.month == 3 and d3.day == 15
 
 
 def test_parse_money():
     assert _parse_money("$1,234.50") == Decimal("1234.50")
+    assert _parse_money("(150.0000)") == Decimal("-150.0000")
+    assert _parse_money("(1,500.00)") == Decimal("-1500.00")
     assert _parse_money("--") is None
     assert _parse_money("") is None
+
+
+def test_schwab_transfer_in_kind_omitted():
+    assert _row_from_stock_fields(
+        trade_date_str="2024-09-05",
+        activity="Transfer",
+        desc="RS 62256",
+        purchase_price_str="--",
+        acq_fmv_str="$135.58",
+        shares_str="(150.0000)",
+        sale_price_str="--",
+        proceeds_str="--",
+        ticker="NVDA",
+        default_currency="USD",
+        source="s.pdf",
+    ) is None
 
 
 def test_lines_from_words_and_bucket():
@@ -204,31 +229,197 @@ def test_resolve_existing_row_keys_force(tmp_path):
     assert len(resolve_existing_row_keys(p, force=False)) == 1
 
 
-def test_collect_rows_from_dir_only_account_statement_files(
+def test_collect_rows_from_dir_supported_file_patterns(
     tmp_path,
     monkeypatch,
 ):
     (tmp_path / "Account Statement_2025-12-31.PDF").write_text("x")
-    (tmp_path / "Account Statement_2026-03-31.PDF").write_text("x")
+    (tmp_path / "ClientStatements_9139_053119.pdf").write_text("x")
+    (tmp_path / "U5486467_20240101_20241231.pdf").write_text("x")
     (tmp_path / "Year-end Statement_2025-12-31.PDF").write_text("x")
     (tmp_path / "Restricted Stock Activity_2025-12-10.PDF").write_text("x")
 
-    parsed = []
+    parsed_schwab = []
+    parsed_etrade = []
+    parsed_ibkr = []
 
-    def fake_extract(path, _currency):
-        parsed.append(path.name)
+    def fake_extract_schwab(path, _currency):
+        parsed_schwab.append(path.name)
+        return []
+
+    def fake_extract_etrade(path, _currency):
+        parsed_etrade.append(path.name)
+        return []
+
+    def fake_extract_ibkr(path, _currency):
+        parsed_ibkr.append(path.name)
         return []
 
     monkeypatch.setattr(
         "capgains.statements_importer.extract_acb_rows_from_pdf",
-        fake_extract,
+        fake_extract_schwab,
+    )
+    monkeypatch.setattr(
+        "capgains.statements_importer.extract_acb_rows_from_etrade_pdf",
+        fake_extract_etrade,
+    )
+    monkeypatch.setattr(
+        "capgains.statements_importer.extract_acb_rows_from_ibkr_pdf",
+        fake_extract_ibkr,
     )
     rows = collect_rows_from_dir(tmp_path, "USD", verbose=False)
     assert rows == []
-    assert parsed == [
+    assert parsed_schwab == [
         "Account Statement_2025-12-31.PDF",
-        "Account Statement_2026-03-31.PDF",
     ]
+    assert parsed_etrade == ["ClientStatements_9139_053119.pdf"]
+    assert parsed_ibkr == ["U5486467_20240101_20241231.pdf"]
+
+
+def test_acbs_from_etrade_espp_confirmation_text_synthetic():
+    text = (
+        "EMPLOYEE STOCK PLAN PURCHASE CONFIRMATION\n"
+        "DEVICES(AMD)\n"
+        "Purchase Date\n"
+        "3-15-2024\n"
+        "Quantity Shares Deposited STREETNAME\n"
+        "12.5\n"
+        "Purchase Price per Share\n"
+        "$10.25\n"
+    )
+    rows = _acbs_from_etrade_espp_confirmation_text(
+        text,
+        source="getEsppConfirmation_1.pdf",
+        default_currency="USD",
+    )
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.trade_date.isoformat() == "2024-03-15"
+    assert r.ticker == "AMD"
+    assert r.action == "BUY"
+    assert r.qty == Decimal("12.5")
+    assert r.price == Decimal("10.25")
+    assert r.description == "ESPP Purchase (E*TRADE plan)"
+    assert r.source == "getEsppConfirmation_1.pdf"
+
+
+def test_acbs_from_etrade_rsu_release_text_synthetic():
+    text = (
+        "EMPLOYEE STOCK PLAN RELEASE CONFIRMATION\n"
+        "DEVICES(AMD)\n"
+        "Release Date\n"
+        "1-20-2024\n"
+        "Market Value Per Share\n"
+        "150.00\n"
+        "Shares Issued\n"
+        "5.5\n"
+        "Award Number\n"
+        "RU12345\n"
+    )
+    rows = _acbs_from_etrade_rsu_release_text(
+        text,
+        source="getReleaseConfirmation_1.pdf",
+        default_currency="USD",
+    )
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.trade_date.isoformat() == "2024-01-20"
+    assert r.ticker == "AMD"
+    assert r.action == "BUY"
+    assert r.qty == Decimal("5.5")
+    assert r.price == Decimal("150.00")
+    assert r.description == "RSU Release RU12345 (E*TRADE plan)"
+    assert r.source == "getReleaseConfirmation_1.pdf"
+
+
+def test_collect_rows_from_dir_supported_file_patterns_includes_etrade_plan(
+    tmp_path,
+    monkeypatch,
+):
+    (tmp_path / "getEsppConfirmation_amd.pdf").write_text("x")
+    (tmp_path / "getReleaseConfirmation_rsu.pdf").write_text("x")
+    (tmp_path / "getreleaseconfirmation_2.pdf").write_text("x")
+    (tmp_path / "misc.txt").write_text("n")
+
+    parsed_espp = []
+    parsed_rsu = []
+
+    def fake_espp(path, _currency):
+        parsed_espp.append(path.name)
+        return []
+
+    def fake_rsu(path, _currency):
+        parsed_rsu.append(path.name)
+        return []
+
+    _si = "capgains.statements_importer"
+    monkeypatch.setattr(
+        f"{_si}.extract_acb_rows_from_etrade_espp_confirmation",
+        fake_espp,
+    )
+    monkeypatch.setattr(
+        f"{_si}.extract_acb_rows_from_etrade_rsu_release",
+        fake_rsu,
+    )
+    monkeypatch.setattr(
+        "capgains.statements_importer.extract_acb_rows_from_pdf",
+        lambda _path, _currency: [],
+    )
+    collect_rows_from_dir(tmp_path, "USD", verbose=False)
+    assert sorted(parsed_espp) == ["getEsppConfirmation_amd.pdf"]
+    # Lowercase getreleaseconfirmation_ matches RSU; distinct from ESPP
+    assert sorted(parsed_rsu) == [
+        "getReleaseConfirmation_rsu.pdf",
+        "getreleaseconfirmation_2.pdf",
+    ]
+
+
+def test_collect_rows_from_dir_verbose_summary_includes_ib(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    (tmp_path / "Account Statement_2026-03-31.PDF").write_text("x")
+    (tmp_path / "U5486467_20240101_20241231.pdf").write_text("x")
+
+    monkeypatch.setattr(
+        "capgains.statements_importer.extract_acb_rows_from_pdf",
+        lambda _path, _currency: [],
+    )
+    monkeypatch.setattr(
+        "capgains.statements_importer.extract_acb_rows_from_ibkr_pdf",
+        lambda _path, _currency: [],
+    )
+    rows = collect_rows_from_dir(tmp_path, "USD", verbose=True)
+    assert rows == []
+    out = capsys.readouterr().err
+    assert "1 Interactive Brokers Activity Statement file(s)" in out
+    assert "0 skipped." in out
+
+
+def test_collect_rows_from_dir_verbose_includes_etrade_plan_count(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    (tmp_path / "getEsppConfirmation_x.pdf").write_text("x")
+    (tmp_path / "getReleaseConfirmation_y.pdf").write_text("x")
+    (tmp_path / "random_unsupported.pdf").write_text("x")
+
+    _si = "capgains.statements_importer"
+    monkeypatch.setattr(
+        f"{_si}.extract_acb_rows_from_etrade_espp_confirmation",
+        lambda _p, _c: [],
+    )
+    monkeypatch.setattr(
+        f"{_si}.extract_acb_rows_from_etrade_rsu_release",
+        lambda _p, _c: [],
+    )
+    collect_rows_from_dir(tmp_path, "USD", verbose=True)
+    err = capsys.readouterr().err
+    assert "Found 3 PDF(s)" in err
+    assert "2 E*TRADE plan confirmation (ESPP/RSU) file(s)" in err
+    assert "1 skipped." in err
 
 
 def test_extract_rows_from_text_blocks_vertical_layout():
@@ -254,6 +445,56 @@ def test_extract_rows_from_text_blocks_vertical_layout():
     assert row.qty == Decimal("181.0000")
     assert row.price == Decimal("135.58")
     assert row.source == "Account Statement_2024-06-30.PDF"
+
+
+def test_extract_rows_from_ibkr_stocks_trades_section():
+    lines = [
+        "Stocks",
+        "USD",
+        "NVDA",
+        "2024-10-04,",
+        "09:33:21",
+        "0.0102",
+        "124.0400",
+        "124.9200",
+        "-1.27",
+        "0.00",
+        "1.27",
+        "0.00",
+        "0.01",
+        "O;R",
+        "QQQ",
+        "2024-08-07,",
+        "04:00:00",
+        "-75",
+        "441.6700",
+        "434.7700",
+        "33,125.25",
+        "-1.34",
+        "-35,865.79",
+        "-2,741.89",
+        "517.50",
+        "C",
+        "Total in CAD",
+    ]
+    rows = _extract_rows_from_ibkr_stocks_trades_section(
+        lines,
+        source="U5486467_20240101_20241231.pdf",
+        default_currency="CAD",
+    )
+    assert len(rows) == 2
+    assert rows[0].ticker == "NVDA"
+    assert rows[0].action == "BUY"
+    assert rows[0].qty == Decimal("0.0102")
+    assert rows[0].price == Decimal("124.0400")
+    assert rows[0].commission == Decimal("0")
+    assert rows[0].currency == "USD"
+    assert rows[1].ticker == "QQQ"
+    assert rows[1].action == "SELL"
+    assert rows[1].qty == Decimal("75")
+    assert rows[1].price == Decimal("441.6700")
+    assert rows[1].commission == Decimal("1.34")
+    assert rows[1].source == "U5486467_20240101_20241231.pdf"
 
 
 def test_stock_split_price_is_zero():
@@ -339,3 +580,38 @@ def test_extract_rows_from_etrade_section_sold_rows():
     assert rows[0].qty == Decimal("45")
     assert rows[0].price == Decimal("27.0300")
     assert rows[0].source == "ClientStatements_9139_053119.pdf"
+
+
+def test_etrade_stmt_line_is_sell_to_cover_tax_phrases():
+    assert _etrade_stmt_line_is_sell_to_cover_tax(
+        "ADVANCED MICRO DEVICES INC SELL TO COVER",
+    )
+    assert _etrade_stmt_line_is_sell_to_cover_tax("Sale to cover - AMD COM")
+    assert _etrade_stmt_line_is_sell_to_cover_tax(
+        "EMPLOYEE STOCK PLAN TAX WITHHOLDING",
+    )
+    assert not _etrade_stmt_line_is_sell_to_cover_tax(
+        "ADVANCED MICRO DEVICES INC COM",
+    )
+
+
+def test_extract_rows_from_etrade_section_omits_sell_to_cover():
+    section = (
+        "TRANSACTION HISTORY SECURITIES PURCHASED OR SOLD TRADE DATE "
+        "SETTLEMENT DATE DESCRIPTION SYMBOL/CUSIP TRANSACTION TYPE QUANTITY "
+        "PRICE AMOUNT PURCHASED AMOUNT SOLD "
+        "05/10/19 09:30 05/14/19 ADVANCED MICRO DEVICES INC COM AMD "
+        "Sold -100 25.00 2,500.00 "
+        "05/11/19 10:00 05/15/19 ADVANCED MICRO DEVICES SELL TO COVER AMD "
+        "Sold -5 30.00 150.00 "
+        "05/12/19 10:00 05/16/19 ADVANCED MICRO DEVICES INC COM AMD "
+        "Sold -3 32.00 96.00 "
+        "TOTAL SECURITIES ACTIVITY"
+    )
+    rows = _extract_rows_from_etrade_section(
+        section,
+        source="ClientStatements_x.pdf",
+        default_currency="USD",
+    )
+    assert len(rows) == 2
+    assert {r.qty for r in rows} == {Decimal("100"), Decimal("3")}

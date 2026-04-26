@@ -1,5 +1,5 @@
 """
-Import Schwab account statement PDFs into cad-capital-gains CSV rows.
+Import brokerage statement PDFs into cad-capital-gains CSV rows.
 
 Parses the "Stock Transaction Summary" table using word positions from
 PyMuPDF. Layout is tuned for common Schwab stock-summary tables; other
@@ -26,19 +26,22 @@ Word = Tuple[float, float, float, float, str, int, int, int]
 _X_BOUNDS = (0, 95, 180, 265, 345, 405, 475, 555, 635, 705, 1200)
 
 # Named indices into the list produced by _bucket_line() for each PDF row.
-_COL_DATE           = 0
-_COL_ACTIVITY       = 1
-_COL_DESC           = 2
+_COL_DATE = 0
+_COL_ACTIVITY = 1
+_COL_DESC = 2
 # index 3 = purchase/vest date (not used)
 _COL_PURCHASE_PRICE = 4
-_COL_ACQ_FMV        = 5
+_COL_ACQ_FMV = 5
 # index 6 = subscription FMV (not used)
-_COL_SHARES         = 7
-_COL_SALE_PRICE     = 8
-_COL_PROCEEDS       = 9
+_COL_SHARES = 7
+_COL_SALE_PRICE = 8
+_COL_PROCEEDS = 9
 
 _DATE_RE = re.compile(
     r"^\s*(\d{1,2})/(\d{1,2})/(\d{2,4})\s*$"
+)
+_US_M_D_Y_DASH = re.compile(
+    r"^\s*(\d{1,2})-(\d{1,2})-(\d{4})\s*$"
 )
 _ISODATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _TIME_RE = re.compile(r"^\d{2}:\d{2}:\d{2}$")
@@ -55,11 +58,19 @@ _ETRADE_ROW_RE = re.compile(
     r"(?P<amt>[\d,]+(?:\.\d{2})?)"
     r"(?=\s+\d{2}/\d{2}/\d{2,4}\s+\d{2}:\d{2}\s+\d{2}/\d{2}/\d{2,4}\s+|\s+TOTAL SECURITIES ACTIVITY)"  # noqa: E501
 )
+_IB_ACTIVITY_FILE_RE = re.compile(
+    r"^U\d+_\d{8}_\d{8}\.pdf$",
+    re.IGNORECASE,
+)
+_IB_DATE_LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2},?$")
+_IB_CURRENCY_RE = re.compile(r"^(CAD|USD)$")
+_IB_TICKER_RE = re.compile(r"^[A-Z][A-Z0-9\.\-]{0,9}$")
 
 # Marks duplicate rows in the CSV (description) and in the terminal
 _DUP_PREFIX = "[DUPLICATE] "
 _DUP_STAMP_RE = re.compile(r"^\[DUPLICATE\]\s*", re.IGNORECASE)
-# Standard stock split ratios to test when inferring split factor (2:1 through 10:1).
+# Standard stock split ratios to test when inferring split factor
+# (2:1 through 10:1).
 _COMMON_SPLIT_FACTORS = (2, 3, 4, 5, 10)
 
 
@@ -137,6 +148,10 @@ def _parse_trade_date(raw: str) -> date:
     raw = raw.strip()
     if _ISODATE_RE.match(raw):
         return date.fromisoformat(raw)
+    m = _US_M_D_Y_DASH.match(raw)
+    if m:
+        mo, d, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        return date(y, mo, d)
     m = _DATE_RE.match(raw)
     if not m:
         raise ValueError("bad date {!r}".format(raw))
@@ -150,11 +165,17 @@ def _parse_money(raw: str) -> Optional[Decimal]:
     s = raw.strip()
     if not s or s == "--":
         return None
+    paren_neg = s.startswith("(") and s.endswith(")")
+    if paren_neg:
+        s = s[1:-1]
     s = s.replace("$", "").replace(",", "")
     try:
-        return Decimal(s)
+        v = Decimal(s)
     except InvalidOperation:
         return None
+    if paren_neg:
+        v = -abs(v)
+    return v
 
 
 def _is_date_token(s: str) -> bool:
@@ -169,6 +190,28 @@ def _is_time_token(s: str) -> bool:
 def _is_etrade_client_statement(path: Path) -> bool:
     name = path.name.lower()
     return name.endswith(".pdf") and name.startswith("clientstatements_")
+
+
+def _is_etrade_espp_confirmation(path: Path) -> bool:
+    n = path.name.lower()
+    return n.endswith(".pdf") and n.startswith("getesppconfirmation_")
+
+
+def _is_etrade_rsu_release(path: Path) -> bool:
+    n = path.name.lower()
+    return n.endswith(".pdf") and n.startswith("getreleaseconfirmation_")
+
+
+def _is_schwab_account_statement(path: Path) -> bool:
+    return path.name.lower().startswith("account statement")
+
+
+def _is_ib_activity_statement(path: Path) -> bool:
+    return bool(_IB_ACTIVITY_FILE_RE.match(path.name))
+
+
+def _skip_reason_for_pdf(path: Path) -> str:
+    return "unsupported statement filename pattern"
 
 
 def _infer_split_factor_and_mode(
@@ -455,6 +498,11 @@ def _row_from_stock_fields(
     summary_l = "{} {}".format(activity, desc).lower()
     is_stock_split = "stock split" in summary_l
     act_l = activity.lower()
+    # In-broker ACAT/position transfer (e.g. out to / in from another broker)
+    # is not a purchase or a taxable sale; carrying ACB. Do not emit CSV rows
+    # (FOP/ACAT in at IB is handled separately: not imported as stock trades).
+    if act_l == "transfer":
+        return None
     if any(k in act_l for k in ("sell", "sale", "sold")):
         action = "SELL"
     elif proceeds > 0 and sale_price > 0:
@@ -665,6 +713,37 @@ def extract_acb_rows_from_pdf(
     return rows
 
 
+_SELL_TO_COVER_PHRASE_RE = re.compile(
+    r"(?:"
+    r"\b(?:sell|sale|sold)[-\s]+to[-\s]+cover\b"
+    r"|for\s+tax\s+withhold"
+    r"|\bshares?\s+sold\s+for\s+taxes?\b"
+    r"|\bstock\s+sold\s+for\s+taxes?\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _etrade_stmt_line_is_sell_to_cover_tax(desc: str) -> bool:
+    """True if an E*TRADE ClientStatements securities line is withholding.
+
+    Sell-to-cover and similar lines fund tax on RSU/ESPP/vesting. They should
+    not be imported as standalone dispositions when vesting is captured from
+    plan confirmations, to avoid double-counting share reductions.
+    """
+    d = " ".join(desc.split())
+    if not d:
+        return False
+    if _SELL_TO_COVER_PHRASE_RE.search(d):
+        return True
+    dl = d.lower()
+    if "withholding" in dl and any(
+        x in dl for x in ("employee", "espp", "rsu", "vest", "release", "plan")
+    ):
+        return True
+    return False
+
+
 def _extract_rows_from_etrade_section(
     section_text: str,
     source: str,
@@ -688,6 +767,8 @@ def _extract_rows_from_etrade_section(
         if qty <= 0:
             continue
         desc = " ".join(m.group("desc").split())
+        if action == "SELL" and _etrade_stmt_line_is_sell_to_cover_tax(desc):
+            continue
         rows.append(
             AcbRow(
                 trade_date=trade_date,
@@ -741,6 +822,361 @@ def extract_acb_rows_from_etrade_pdf(
     return rows
 
 
+def _ticker_from_etrade_morgan_stanley_pdf(text: str) -> Optional[str]:
+    m = re.search(
+        r"DEVICES\(([A-Z][A-Z0-9]+)\)", text, re.IGNORECASE
+    )
+    if m:
+        return m.group(1).upper()
+    m = re.search(
+        r"Company Name \(Symbol\)[\s\S]{0,200}?\(([A-Z][A-Z0-9]+)\)",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).upper()
+    for m in re.finditer(
+        r"^\s*\(([A-Z][A-Z0-9]{0,4})\)\s*$", text, re.MULTILINE
+    ):
+        t = m.group(1)
+        if t.upper() in ("I", "C"):
+            continue
+        return t.upper()
+    return None
+
+
+def _acbs_from_etrade_espp_confirmation_text(
+    text: str,
+    source: str,
+    default_currency: str,
+) -> List[AcbRow]:
+    if "EMPLOYEE STOCK PLAN PURCHASE CONFIRMATION" not in text:
+        return []
+    lines = [ln.rstrip() for ln in text.splitlines()]
+    ticker = _ticker_from_etrade_morgan_stanley_pdf(text)
+    if not ticker:
+        return []
+
+    pdate: Optional[date] = None
+    for i, ln in enumerate(lines):
+        if ln.strip() == "Purchase Date" and i + 1 < len(lines):
+            try:
+                pdate = _parse_trade_date(lines[i + 1].strip())
+            except ValueError:
+                pdate = None
+            if pdate is not None:
+                break
+    if pdate is None:
+        m = re.search(
+            r"Purchase Date\s+(\d{1,2}-\d{1,2}-\d{4})",
+            " ".join(text.split()),
+        )
+        if m:
+            try:
+                pdate = _parse_trade_date(m.group(1))
+            except ValueError:
+                pdate = None
+    if pdate is None:
+        return []
+
+    qty: Optional[Decimal] = None
+    for i, ln in enumerate(lines):
+        if "Shares Deposited" in ln and "STREETNAME" in ln:
+            for j in range(i + 1, min(i + 8, len(lines))):
+                t = lines[j].replace(" ", "")
+                v = _parse_money(t) if t else None
+                if v is not None and v > 0:
+                    qty = v
+                    break
+            break
+    if qty is None:
+        m = re.search(
+            r"E\*?TRADE.*?\n\s*(\d+[\d,]*\.?\d*)\s",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if m:
+            v = _parse_money(m.group(1))
+            if v is not None and v > 0:
+                qty = v
+    if qty is None or qty <= 0:
+        return []
+
+    ppx: Optional[Decimal] = None
+    for i, ln in enumerate(lines):
+        if ln.strip() == "Purchase Price per Share":
+            for j in range(i + 1, min(i + 15, len(lines))):
+                t = lines[j].strip()
+                mpr = re.search(
+                    r"(\$?\s*[\d,]+(?:\.\d{2,8}))\s*$",
+                    t,
+                )
+                if mpr:
+                    ppx = _parse_money(mpr.group(1).replace(" ", ""))
+                    if ppx is not None and ppx > 0:
+                        break
+            if ppx is not None and ppx > 0:
+                break
+    if ppx is None or ppx <= 0:
+        return []
+    return [
+        AcbRow(
+            trade_date=pdate,
+            description="ESPP Purchase (E*TRADE plan)",
+            ticker=ticker,
+            action="BUY",
+            qty=qty,
+            price=ppx,
+            commission=Decimal(0),
+            currency=default_currency,
+            source=source,
+        )
+    ]
+
+
+def _acbs_from_etrade_rsu_release_text(
+    text: str,
+    source: str,
+    default_currency: str,
+) -> List[AcbRow]:
+    if "EMPLOYEE STOCK PLAN RELEASE CONFIRMATION" not in text:
+        return []
+    lines = [ln.rstrip() for ln in text.splitlines()]
+    ticker = _ticker_from_etrade_morgan_stanley_pdf(text)
+    if not ticker:
+        return []
+
+    m = re.search(
+        r"Release Date\s*[\n\r]+\s*(\d{1,2}-\d{1,2}-\d{4})",
+        text,
+    )
+    rdate: Optional[date] = None
+    if m:
+        try:
+            rdate = _parse_trade_date(m.group(1).strip())
+        except ValueError:
+            rdate = None
+    if rdate is None:
+        m = re.search(
+            r"Release Date\s+(\d{1,2}-\d{1,2}-\d{4})",
+            " ".join(text.split()),
+        )
+        if m:
+            try:
+                rdate = _parse_trade_date(m.group(1).strip())
+            except ValueError:
+                rdate = None
+    if rdate is None:
+        return []
+
+    mkt: Optional[Decimal] = None
+    for i, ln in enumerate(lines):
+        if ln.strip() == "Market Value Per Share" and i + 1 < len(lines):
+            v = _parse_money(lines[i + 1].strip())
+            if v is not None and v > 0:
+                mkt = v
+                break
+    if mkt is None:
+        m2 = re.search(
+            r"Market Value Per Share\s*[\$]?\s*(\d+[\d,]*\.?\d+)",
+            " ".join(text.split()),
+        )
+        if m2:
+            mkt = _parse_money(m2.group(0))
+    if mkt is None or mkt <= 0:
+        return []
+
+    issued: Optional[Decimal] = None
+    for i, ln in enumerate(lines):
+        if ln.strip() == "Shares Issued" and i + 1 < len(lines):
+            v = _parse_money(lines[i + 1].strip())
+            if v is not None and v > 0:
+                issued = v
+                break
+    if issued is None or issued <= 0:
+        return []
+    m_aw = re.search(
+        r"Award Number\s*[\n\r]*\s*(\S+)", text, re.IGNORECASE
+    )
+    award = (m_aw.group(1) if m_aw else "")[:80]
+    if award:
+        desc = "RSU Release {} (E*TRADE plan)".format(award)[:500]
+    else:
+        desc = "RSU Release (E*TRADE plan)"
+    return [
+        AcbRow(
+            trade_date=rdate,
+            description=desc,
+            ticker=ticker,
+            action="BUY",
+            qty=issued,
+            price=mkt,
+            commission=Decimal(0),
+            currency=default_currency,
+            source=source,
+        )
+    ]
+
+
+def extract_acb_rows_from_etrade_espp_confirmation(
+    path: Path,
+    default_currency: str,
+) -> List[AcbRow]:
+    fitz = _import_fitz()
+    if not path.is_file() or path.stat().st_size <= 0:
+        return []
+    source = path.name.strip() or "Manual"
+    with fitz.open(path) as doc:
+        text = "\n".join(page.get_text() for page in doc)
+    rows = _acbs_from_etrade_espp_confirmation_text(
+        text,
+        source=source,
+        default_currency=default_currency,
+    )
+    return sorted(
+        rows,
+        key=lambda r: (r.trade_date, r.ticker, r.action),
+    )
+
+
+def extract_acb_rows_from_etrade_rsu_release(
+    path: Path,
+    default_currency: str,
+) -> List[AcbRow]:
+    fitz = _import_fitz()
+    if not path.is_file() or path.stat().st_size <= 0:
+        return []
+    source = path.name.strip() or "Manual"
+    with fitz.open(path) as doc:
+        text = "\n".join(page.get_text() for page in doc)
+    rows = _acbs_from_etrade_rsu_release_text(
+        text,
+        source=source,
+        default_currency=default_currency,
+    )
+    return sorted(
+        rows,
+        key=lambda r: (r.trade_date, r.ticker, r.action),
+    )
+
+
+def _extract_rows_from_ibkr_stocks_trades_section(
+    section_lines: Sequence[str],
+    source: str,
+    default_currency: str,
+) -> List[AcbRow]:
+    rows: List[AcbRow] = []
+    lines = [ln.strip() for ln in section_lines if ln.strip()]
+    curr = default_currency
+    i = 0
+    while i + 7 < len(lines):
+        line = lines[i]
+        if _IB_CURRENCY_RE.match(line):
+            curr = line
+            i += 1
+            continue
+        if line.startswith("Total"):
+            i += 1
+            continue
+        if not _IB_TICKER_RE.match(line):
+            i += 1
+            continue
+        date_raw = lines[i + 1]
+        time_raw = lines[i + 2]
+        if not _IB_DATE_LINE_RE.match(date_raw):
+            i += 1
+            continue
+        if not _TIME_RE.match(time_raw):
+            i += 1
+            continue
+        qty_raw = _parse_money(lines[i + 3])
+        trade_price = _parse_money(lines[i + 4])
+        commission = _parse_money(lines[i + 7])
+        if qty_raw is None or trade_price is None or commission is None:
+            i += 1
+            continue
+        qty = abs(qty_raw)
+        if qty <= 0:
+            i += 1
+            continue
+        try:
+            trade_date = _parse_trade_date(date_raw.rstrip(","))
+        except ValueError:
+            i += 1
+            continue
+        rows.append(
+            AcbRow(
+                trade_date=trade_date,
+                description="IBKR Trade",
+                ticker=line,
+                action="SELL" if qty_raw < 0 else "BUY",
+                qty=qty,
+                price=abs(trade_price),
+                commission=abs(commission),
+                currency=curr,
+                source=source,
+            )
+        )
+        i += 8
+    return rows
+
+
+def extract_acb_rows_from_ibkr_pdf(
+    path: Path,
+    default_currency: str,
+) -> List[AcbRow]:
+    """Pull executed stock trades from Trades->Stocks only.
+
+    In-kind broker transfers (FOP/ACAT) appear under the Transfers section, not
+    here; we do not import them as buys/sells, to avoid double-counting cost
+    base when Schwab + IB statements are combined in one folder.
+    """
+    fitz = _import_fitz()
+    if not path.is_file() or path.stat().st_size <= 0:
+        return []
+    source = path.name.strip() or "Manual"
+    rows: List[AcbRow] = []
+    with fitz.open(path) as doc:
+        for page in doc:
+            text = page.get_text()
+            if "Trades" not in text or "Date/Time" not in text:
+                continue
+            lines = text.splitlines()
+            for i, raw in enumerate(lines):
+                if raw.strip() != "Trades":
+                    continue
+                if i + 1 >= len(lines) or lines[i + 1].strip() != "Symbol":
+                    continue
+                stocks_idx = -1
+                for j in range(i, len(lines)):
+                    if lines[j].strip() == "Stocks":
+                        stocks_idx = j
+                        break
+                if stocks_idx == -1:
+                    continue
+                end = len(lines)
+                for j in range(stocks_idx + 1, len(lines)):
+                    marker = lines[j].strip()
+                    if marker in (
+                        "Symbol",
+                        "Equity and Index Options",
+                        "Transfers",
+                        "Dividends",
+                        "Withholding Tax",
+                    ):
+                        end = j
+                        break
+                rows.extend(
+                    _extract_rows_from_ibkr_stocks_trades_section(
+                        lines[stocks_idx:end],
+                        source=source,
+                        default_currency=default_currency,
+                    )
+                )
+    rows.sort(key=lambda r: (r.trade_date, r.ticker, r.action))
+    return rows
+
+
 def collect_rows_from_dir(
     input_dir: Path,
     default_currency: str,
@@ -750,31 +1186,48 @@ def collect_rows_from_dir(
     pdfs = sorted(input_dir.glob("*.pdf")) + sorted(input_dir.glob("*.PDF"))
     schwab_pdfs = [
         p for p in pdfs
-        if p.name.lower().startswith("account statement")
+        if _is_schwab_account_statement(p)
     ]
     etrade_pdfs = [
         p for p in pdfs
         if _is_etrade_client_statement(p)
     ]
-    relevant_pdfs = list(dict.fromkeys(schwab_pdfs + etrade_pdfs))
+    ibkr_pdfs = [
+        p for p in pdfs
+        if _is_ib_activity_statement(p)
+    ]
+    etrade_plan_pdfs = [
+        p for p in pdfs
+        if _is_etrade_espp_confirmation(p) or _is_etrade_rsu_release(p)
+    ]
+    relevant_pdfs = list(
+        dict.fromkeys(
+            schwab_pdfs + etrade_pdfs + etrade_plan_pdfs + ibkr_pdfs,
+        )
+    )
     skipped_pdfs = [p for p in pdfs if p not in relevant_pdfs]
     if verbose:
         msg = (
             "Found {} PDF(s): {} Schwab Account Statement file(s), "
-            "{} E*TRADE ClientStatement file(s), {} skipped."
+            "{} E*TRADE ClientStatement file(s), "
+            "{} E*TRADE plan confirmation (ESPP/RSU) file(s), "
+            "{} Interactive Brokers Activity Statement file(s), "
+            "{} skipped."
         )
         click.echo(
             msg.format(
                 len(pdfs),
                 len(schwab_pdfs),
                 len(etrade_pdfs),
+                len(etrade_plan_pdfs),
+                len(ibkr_pdfs),
                 len(skipped_pdfs),
             ),
             err=True,
         )
         for p in skipped_pdfs:
             click.echo(
-                "Skipping non-Account-Statement file: {}".format(p.name),
+                "Skipping {}: {}".format(_skip_reason_for_pdf(p), p.name),
                 err=True,
             )
 
@@ -787,6 +1240,24 @@ def collect_rows_from_dir(
         if _is_etrade_client_statement(p):
             all_rows.extend(
                 extract_acb_rows_from_etrade_pdf(p, default_currency)
+            )
+        elif _is_etrade_espp_confirmation(p):
+            all_rows.extend(
+                extract_acb_rows_from_etrade_espp_confirmation(
+                    p,
+                    default_currency,
+                )
+            )
+        elif _is_etrade_rsu_release(p):
+            all_rows.extend(
+                extract_acb_rows_from_etrade_rsu_release(
+                    p,
+                    default_currency,
+                )
+            )
+        elif _is_ib_activity_statement(p):
+            all_rows.extend(
+                extract_acb_rows_from_ibkr_pdf(p, default_currency)
             )
         else:
             all_rows.extend(extract_acb_rows_from_pdf(p, default_currency))
@@ -881,7 +1352,7 @@ def main(
     force: bool,
     verbose: bool,
 ) -> None:
-    """Read Schwab statement PDFs from INPUT_DIR and write acb-style CSV."""
+    """Read supported brokerage statement PDFs from INPUT_DIR."""
     _import_fitz()
     in_dir = _path_arg(input_dir)
     out_path = _path_arg(output_path)
