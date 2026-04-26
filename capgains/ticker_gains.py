@@ -65,22 +65,19 @@ class TickerGains:
 
     def _add_transaction(self, transaction):
         """Adds a transaction and updates the calculated values."""
-        # Handle JOURNAL transactions as administrative events that preserve ACB
+        # JOURNAL: adjust balance, keep ACB (Norbert's Gambit DLR.U → DLR).
         if 'JOURNAL' in transaction.action:
-            # For JOURNAL transactions, we update the share balance but preserve ACB
-            # This properly handles Norbert's Gambit where DLR.U is converted to DLR
-            # Direction matters: JOURNAL_IN adds to share balance, JOURNAL_OUT reduces it
+            # JOURNAL_IN adds shares; JOURNAL_OUT reduces.
             if transaction.action == 'JOURNAL_IN':
                 self._share_balance += transaction.qty
             elif transaction.action == 'JOURNAL_OUT':
                 self._share_balance -= transaction.qty
 
-            # Set transaction fields - no proceeds or capital gain on journal entries
+            # No proceeds or capital gain on journal entries.
             transaction.proceeds = Decimal('0.0')
             transaction.capital_gain = Decimal('0.0')
-            transaction.acb = Decimal(
-                '0.0'
-            )  # No change to ACB for the individual entry
+            # No change to ACB for this entry.
+            transaction.acb = Decimal('0.0')
             transaction.share_balance = self._share_balance
             transaction.cumulative_cost = self._total_acb
             return
@@ -91,8 +88,8 @@ class TickerGains:
         else:
             old_acb_per_share = self._total_acb / self._share_balance
         proceeds = (
-            transaction.qty * transaction.price
-        ) * transaction.exchange_rate  # noqa: E501
+            transaction.qty * transaction.price * transaction.exchange_rate
+        )
         if transaction.action == 'SELL':
             self._share_balance -= transaction.qty
             acb = old_acb_per_share * transaction.qty

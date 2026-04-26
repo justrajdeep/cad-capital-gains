@@ -50,13 +50,21 @@ def test_maxcost_sample_2022():
 
     # Test CSV input
     csv_result = runner.invoke(
-        capgains, ['maxcost', os.path.join('tests', 'sample_data', 'sample.csv'), '2022']
+        capgains, [
+            'maxcost',
+            os.path.join('tests', 'sample_data', 'sample.csv'),
+            '2022'
+        ]
     )
     assert csv_result.exit_code == 0
 
     # Test JSON input
     json_result = runner.invoke(
-        capgains, ['maxcost', os.path.join('tests', 'sample_data', 'sample.json'), '2022']
+        capgains, [
+            'maxcost',
+            os.path.join('tests', 'sample_data', 'sample.json'),
+            '2022'
+        ]
     )
     assert json_result.exit_code == 0
 
@@ -78,13 +86,21 @@ def test_maxcost_sample_2023():
 
     # Test CSV input
     csv_result = runner.invoke(
-        capgains, ['maxcost', os.path.join('tests', 'sample_data', 'sample.csv'), '2023']
+        capgains, [
+            'maxcost',
+            os.path.join('tests', 'sample_data', 'sample.csv'),
+            '2023'
+        ]
     )
     assert csv_result.exit_code == 0
 
     # Test JSON input
     json_result = runner.invoke(
-        capgains, ['maxcost', os.path.join('tests', 'sample_data', 'sample.json'), '2023']
+        capgains, [
+            'maxcost',
+            os.path.join('tests', 'sample_data', 'sample.json'),
+            '2023'
+        ]
     )
     assert json_result.exit_code == 0
 
@@ -105,13 +121,21 @@ def test_maxcost_sample_2024():
 
     # Test CSV input
     csv_result = runner.invoke(
-        capgains, ['maxcost', os.path.join('tests', 'sample_data', 'sample.csv'), '2024']
+        capgains, [
+            'maxcost',
+            os.path.join('tests', 'sample_data', 'sample.csv'),
+            '2024'
+        ]
     )
     assert csv_result.exit_code == 0
 
     # Test JSON input
     json_result = runner.invoke(
-        capgains, ['maxcost', os.path.join('tests', 'sample_data', 'sample.json'), '2024']
+        capgains, [
+            'maxcost',
+            os.path.join('tests', 'sample_data', 'sample.json'),
+            '2024'
+        ]
     )
     assert json_result.exit_code == 0
 
@@ -131,13 +155,15 @@ def test_calc_sample_2022():
 
     # Test CSV input
     csv_result = runner.invoke(
-        capgains, ['calc', os.path.join('tests', 'sample_data', 'sample.csv'), '2022']
+        capgains,
+        ['calc', os.path.join('tests', 'sample_data', 'sample.csv'), '2022']
     )
     assert csv_result.exit_code == 0
 
     # Test JSON input
     json_result = runner.invoke(
-        capgains, ['calc', os.path.join('tests', 'sample_data', 'sample.json'), '2022']
+        capgains,
+        ['calc', os.path.join('tests', 'sample_data', 'sample.json'), '2022']
     )
     assert json_result.exit_code == 0
 
@@ -158,13 +184,15 @@ def test_calc_sample_2023():
 
     # Test CSV input
     csv_result = runner.invoke(
-        capgains, ['calc', os.path.join('tests', 'sample_data', 'sample.csv'), '2023']
+        capgains,
+        ['calc', os.path.join('tests', 'sample_data', 'sample.csv'), '2023']
     )
     assert csv_result.exit_code == 0
 
     # Test JSON input
     json_result = runner.invoke(
-        capgains, ['calc', os.path.join('tests', 'sample_data', 'sample.json'), '2023']
+        capgains,
+        ['calc', os.path.join('tests', 'sample_data', 'sample.json'), '2023']
     )
     assert json_result.exit_code == 0
 
@@ -186,13 +214,15 @@ def test_calc_sample_2024():
 
     # Test CSV input
     csv_result = runner.invoke(
-        capgains, ['calc', os.path.join('tests', 'sample_data', 'sample.csv'), '2024']
+        capgains,
+        ['calc', os.path.join('tests', 'sample_data', 'sample.csv'), '2024']
     )
     assert csv_result.exit_code == 0
 
     # Test JSON input
     json_result = runner.invoke(
-        capgains, ['calc', os.path.join('tests', 'sample_data', 'sample.json'), '2024']
+        capgains,
+        ['calc', os.path.join('tests', 'sample_data', 'sample.json'), '2024']
     )
     assert json_result.exit_code == 0
 
@@ -219,7 +249,8 @@ def test_show_sample():
 
     # Test showing all transactions from JSON
     json_result = runner.invoke(
-        capgains, ['show', os.path.join('tests', 'sample_data', 'sample.json')]
+        capgains,
+        ['show', os.path.join('tests', 'sample_data', 'sample.json')]
     )
     assert json_result.exit_code == 0
 
@@ -233,10 +264,22 @@ def test_show_sample():
 
     # Test filtering by ticker with both formats
     csv_filtered = runner.invoke(
-        capgains, ['show', os.path.join('tests', 'sample_data', 'sample.csv'), '-t', 'AAPL']
+        capgains,
+        [
+            'show',
+            os.path.join('tests', 'sample_data', 'sample.csv'),
+            '-t',
+            'AAPL'
+        ]
     )
     json_filtered = runner.invoke(
-        capgains, ['show', os.path.join('tests', 'sample_data', 'sample.json'), '-t', 'AAPL']
+        capgains,
+        [
+            'show',
+            os.path.join('tests', 'sample_data', 'sample.json'),
+            '-t',
+            'AAPL'
+        ]
     )
     assert csv_filtered.exit_code == 0
     assert json_filtered.exit_code == 0
@@ -246,10 +289,12 @@ def test_show_sample():
 
     # Test showing exchange rates with both formats
     csv_rates = runner.invoke(
-        capgains, ['show', os.path.join('tests', 'sample_data', 'sample.csv'), '-e']
+        capgains,
+        ['show', os.path.join('tests', 'sample_data', 'sample.csv'), '-e']
     )
     json_rates = runner.invoke(
-        capgains, ['show', os.path.join('tests', 'sample_data', 'sample.json'), '-e']
+        capgains,
+        ['show', os.path.join('tests', 'sample_data', 'sample.json'), '-e']
     )
     assert csv_rates.exit_code == 0
     assert json_rates.exit_code == 0

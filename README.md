@@ -141,8 +141,18 @@ This command will:
 
 ## Quick Install
 ```bash
-# To get the latest release
-pip install cad-capgains
+# Latest release from PyPI (package name cad-capgains)
+uv tool install cad-capgains
+
+# Or run without installing permanently
+uvx cad-capgains --help
+```
+
+From a git checkout:
+
+```bash
+uv sync
+uv run capgains --help
 ```
 
 ## Try it with Sample Data
@@ -179,12 +189,13 @@ source scripts/envsetup.sh
 ```
 
 The setup script will:
-- Install Poetry if not present
-- Configure Poetry to create virtual environments in the project directory
-- Install all project dependencies
+- Install [uv](https://docs.astral.sh/uv/) if not present
+- Run `uv sync` to create a local virtual environment and install dependencies
 
-To run the tool during development, use the provided script:
+To run the tool during development:
 ```bash
+uv run capgains calc tests/sample_data/sample.csv 2023
+# or:
 ./scripts/capgains calc tests/sample_data/sample.csv 2023
 ```
 

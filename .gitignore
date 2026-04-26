@@ -14,6 +14,8 @@ __pycache__/
 
 # IDE/OS
 .vscode/
+.idea/
+.specstory/
 .DS_Store
 
 # Mac

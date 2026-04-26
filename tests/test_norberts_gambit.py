@@ -31,80 +31,88 @@ def test_norberts_gambit_calculation(requests_mock, setup_sample_data):
     setup_exchange_rates_mock(
         requests_mock, date(2024, 1, 1), date(2025, 12, 31)
     )
-    
+
     # Use the sample data
     sample_path = setup_sample_data
-    
+
     # Run the capital gains calculator
     runner = CliRunner()
     result = runner.invoke(
-        capgains, ['calc', sample_path, '2024', '-t', 'DLR', '--format', 'json']
+        capgains,
+        ['calc', sample_path, '2024', '-t', 'DLR', '--format', 'json']
     )
     assert result.exit_code == 0
-    
+
     # Parse the result
     data = json.loads(result.output)
-    
+
     # Verify DLR ticker is in the results
     assert 'DLR' in data
     dlr_data = data['DLR']
-    
+
     # There should be multiple transactions in the DLR results
     assert len(dlr_data['transactions']) > 0
-    
-    # Check that we have capital gains (the exact amount will depend on the sample data)
+
+    # Capital gains depend on sample data; expect non-zero.
     total_gain = dlr_data['total_gains']
-    assert total_gain != 0, "Expected non-zero capital gain from Norbert's Gambit"
-    
+    assert total_gain != 0, (
+        "Expected non-zero capital gain from Norbert's Gambit"
+    )
+
     # Verify journal transactions don't generate capital gains themselves
-    journal_transactions = [tx for tx in dlr_data['transactions'] 
-                           if 'JOURNAL' in tx.get('description', '')]
-    
+    journal_transactions = [
+        tx for tx in dlr_data['transactions']
+        if 'JOURNAL' in tx.get('description', '')
+    ]
+
     for tx in journal_transactions:
-        assert tx['capital_gain'] == 0, "Journal transactions should not generate capital gains"
+        assert tx['capital_gain'] == 0, (
+            "Journal transactions should not generate capital gains"
+        )
 
 
 def test_norberts_gambit_sequence(requests_mock, setup_sample_data):
     """Test that the full Norbert's Gambit sequence is handled correctly.
-    
+
     A complete Norbert's Gambit sequence involves:
     1. Buying DLR.U in USD
     2. Journaling DLR.U to DLR (USD to CAD)
     3. Selling DLR in CAD
-    
+
     The ACB should be properly carried through the journaling process.
     """
     # Set up exchange rate mock for a wide date range
     setup_exchange_rates_mock(
         requests_mock, date(2024, 1, 1), date(2025, 12, 31)
     )
-    
+
     # Use the sample data
     sample_path = setup_sample_data
-    
+
     # Run the capital gains calculator with detailed output
     runner = CliRunner()
     result = runner.invoke(
-        capgains, ['calc', sample_path, '2024', '-t', 'DLR', '--format', 'json']
+        capgains,
+        ['calc', sample_path, '2024', '-t', 'DLR', '--format', 'json']
     )
     assert result.exit_code == 0
-    
+
     # Parse the result
     data = json.loads(result.output)
-    
+
     # Verify DLR ticker is in the results
     assert 'DLR' in data
     dlr_data = data['DLR']
-    
-    # Verify we have transactions 
+
+    # Verify we have transactions
     assert 'transactions' in dlr_data
     transactions = dlr_data['transactions']
     assert len(transactions) > 0, "Expected sell transactions for DLR"
-    
+
     # Verify we have capital gains
     assert 'total_gains' in dlr_data
     assert dlr_data['total_gains'] != 0, "Expected non-zero capital gains"
-    
+
     # Verify each transaction has the necessary fields
     for tx in transactions:
         assert 'capital_gain' in tx, "Transaction missing capital_gain field"
@@ -167,9 +175,7 @@ def test_create_norberts_gambit_transaction(requests_mock, tmpdir):
         ]
     ]
 
-    csv_path = create_csv_file(
-        tmpdir, "test_norberts.csv", transactions
-    )
+    csv_path = create_csv_file(tmpdir, "test_norberts.csv", transactions)
     runner = CliRunner()
     result = runner.invoke(
         capgains, ['calc', csv_path, '2024', '-t', 'DLR', '--format', 'json']
@@ -179,37 +185,36 @@ def test_create_norberts_gambit_transaction(requests_mock, tmpdir):
     data = json.loads(result.output)
     assert 'DLR' in data
     dlr_data = data['DLR']
-    
-    # Verify we have the right number of transactions
-    # We expect only the SELL transaction in the final output (since we filter for capital gains)
+
+    # Expect one SELL row in filtered capital-gains output.
     assert len(dlr_data['transactions']) == 1
-    
-    # Find the sell transaction
+
     sell_tx = dlr_data['transactions'][0]
     assert 'Sell' in sell_tx['description'], "Expected a sell transaction"
-    
+
     # Calculate expected values:
     # Buy cost = 100 * 10.15 * exchange_rate + commission * exchange_rate
     # Sell proceeds = 100 * 13.71 - commission
     # Gain = Proceeds - ACB - commission
-    
-    # Verify capital gain is correctly calculated
-    assert sell_tx['capital_gain'] == sell_tx['proceeds'] - sell_tx['acb'] - sell_tx['outlays'], \
+
+    expected_gain = (
+        sell_tx['proceeds'] - sell_tx['acb'] - sell_tx['outlays']
+    )
+    assert sell_tx['capital_gain'] == expected_gain, (
         "Capital gain calculation error"
-    
-    # Verify that the capital gain is non-zero (which should be the case for a 
-    # successful Norbert's Gambit)
+    )
+
     assert sell_tx['capital_gain'] != 0, "Expected non-zero capital gain"
 
 
 def test_reverse_norberts_gambit_transaction(requests_mock, tmpdir):
     """Test Norbert's Gambit in reverse direction (CAD to USD).
-    
+
     A reverse Norbert's Gambit sequence involves:
     1. Buying DLR in CAD
     2. Journaling DLR to DLR.U (CAD to USD)
     3. Selling DLR.U in USD
-    
+
     This is commonly used to convert CAD to USD.
     """
     # Set up exchange rate mock for the date range
@@ -220,16 +225,7 @@ def test_reverse_norberts_gambit_transaction(requests_mock, tmpdir):
     # Create a simplified reverse Norbert's Gambit sequence
     transactions = [
         # Buy DLR in CAD
-        [
-            "2024-01-15",
-            "Buy DLR",
-            "DLR",
-            "BUY",
-            "100",
-            "13.71",
-            "9.99",
-            "CAD"
-        ],
+        ["2024-01-15", "Buy DLR", "DLR", "BUY", "100", "13.71", "9.99", "CAD"],
         # Journal DLR to DLR.U (CAD to USD)
         [
             "2024-01-15",
@@ -276,30 +272,30 @@ def test_reverse_norberts_gambit_transaction(requests_mock, tmpdir):
     data = json.loads(result.output)
     assert 'DLR' in data
     dlr_data = data['DLR']
-    
-    # Verify we have the right number of transactions
-    # We expect only the SELL transaction in the final output (since we filter for capital gains)
+
+    # Expect one SELL row in filtered capital-gains output.
     assert len(dlr_data['transactions']) == 1
-    
-    # Find the sell transaction
+
     sell_tx = dlr_data['transactions'][0]
     assert 'Sell' in sell_tx['description'], "Expected a sell transaction"
-    
-    # Verify capital gain is correctly calculated
-    assert sell_tx['capital_gain'] == sell_tx['proceeds'] - sell_tx['acb'] - sell_tx['outlays'], \
+
+    expected_gain = (
+        sell_tx['proceeds'] - sell_tx['acb'] - sell_tx['outlays']
+    )
+    assert sell_tx['capital_gain'] == expected_gain, (
         "Capital gain calculation error"
-    
-    # Verify that the capital gain is non-zero (which should be the case for a 
-    # successful Norbert's Gambit)
+    )
+
     assert sell_tx['capital_gain'] != 0, "Expected non-zero capital gain"
-    
-    # Verify the ticker display is correct
-    assert 'DLR.U' in sell_tx['description'], "Expected DLR.U in the transaction description"
+
+    assert 'DLR.U' in sell_tx['description'], (
+        "Expected DLR.U in the transaction description"
+    )
 
 
 def test_multiple_direction_norberts_gambit(requests_mock, tmpdir):
     """Test both directions of Norbert's Gambit in the same data set.
-    
+
     This test verifies that a mix of USD->CAD and CAD->USD conversions
     are all handled correctly within the same account.
     """
@@ -351,18 +347,9 @@ def test_multiple_direction_norberts_gambit(requests_mock, tmpdir):
             "9.99",
             "CAD"
         ],
-        
+
         # Second sequence: CAD to USD
-        [
-            "2024-02-15",
-            "Buy DLR",
-            "DLR",
-            "BUY",
-            "200",
-            "13.80",
-            "9.99",
-            "CAD"
-        ],
+        ["2024-02-15", "Buy DLR", "DLR", "BUY", "200", "13.80", "9.99", "CAD"],
         [
             "2024-02-15",
             "Journal DLR Out",
@@ -407,20 +394,19 @@ def test_multiple_direction_norberts_gambit(requests_mock, tmpdir):
     data = json.loads(result.output)
     assert 'DLR' in data
     dlr_data = data['DLR']
-    
-    # Note: The calculator will only show the most recent transactions in the output
-    # Verify we have at least one transaction in the output
+
+    # Calculator may surface recent rows; expect at least one.
     assert len(dlr_data['transactions']) > 0
-    
+
     # Verify the transaction we see is a sell transaction
     sell_tx = dlr_data['transactions'][0]
     assert 'Sell' in sell_tx['description'], "Expected a sell transaction"
-    
+
     # Verify the ticker is correct
     assert sell_tx['ticker'] == 'DLR', "Expected DLR ticker"
-    
+
     # Verify the transaction has a non-zero capital gain
     assert sell_tx['capital_gain'] != 0, "Expected non-zero capital gain"
-    
+
     # Verify the total capital gain is non-zero
-    assert dlr_data['total_gains'] != 0, "Expected non-zero total gains" 
+    assert dlr_data['total_gains'] != 0, "Expected non-zero total gains"

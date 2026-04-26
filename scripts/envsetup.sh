@@ -9,24 +9,18 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 echo "Setting up development environment..."
 
-# Add Poetry to PATH
 export PATH="$HOME/.local/bin:$PATH"
 
-# Ensure we're in the project root
 cd "$PROJECT_ROOT"
 
-# Install poetry if not already installed
-if ! command -v poetry &> /dev/null; then
-    echo "Installing Poetry..."
-    curl -sSL https://install.python-poetry.org | python3 -
+if ! command -v uv &> /dev/null; then
+    echo "Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
 fi
 
-# Configure poetry to create virtual environment in project directory
-poetry config virtualenvs.in-project true
-
-# Install project dependencies
 echo "Installing project dependencies..."
-poetry install
+uv sync
 
 echo "Development environment setup complete!"
-echo "You can now use 'poetry run' to execute commands in the virtual environment." 
+echo "Use: uv run capgains ...  or  uv run pytest tests/"
