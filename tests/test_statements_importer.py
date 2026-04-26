@@ -1,8 +1,9 @@
 """Tests for Schwab PDF -> ACB CSV importer (no PyMuPDF required)."""
 from decimal import Decimal
 
-from capgains.schwab_statement_importer import (
+from capgains.statements_importer import (
     AcbRow,
+    _extract_rows_from_etrade_section,
     _extract_rows_from_text_blocks,
     _infer_split_factor_and_mode,
     _normalize_split_rows,
@@ -219,7 +220,7 @@ def test_collect_rows_from_dir_only_account_statement_files(
         return []
 
     monkeypatch.setattr(
-        "capgains.schwab_statement_importer.extract_acb_rows_from_pdf",
+        "capgains.statements_importer.extract_acb_rows_from_pdf",
         fake_extract,
     )
     rows = collect_rows_from_dir(tmp_path, "USD", verbose=False)
@@ -313,3 +314,28 @@ def test_normalize_split_rows_post_mode_converts_qty():
     normalized = _normalize_split_rows(rows, verbose=False)
     assert normalized[0].qty == Decimal("900")
     assert normalized[1].qty == Decimal("1800")
+
+
+def test_extract_rows_from_etrade_section_sold_rows():
+    section = (
+        "TRANSACTION HISTORY SECURITIES PURCHASED OR SOLD TRADE DATE "
+        "SETTLEMENT DATE DESCRIPTION SYMBOL/CUSIP TRANSACTION TYPE QUANTITY "
+        "PRICE AMOUNT PURCHASED AMOUNT SOLD "
+        "05/10/19 09:30 05/14/19 ADVANCED MICRO DEVICES INC COM AMD "
+        "Sold -45 27.0300 1,206.37 "
+        "05/28/19 15:51 05/30/19 ADVANCED MICRO DEVICES INC COM AMD "
+        "Sold -198 29.1633 5,764.26 "
+        "TOTAL SECURITIES ACTIVITY"
+    )
+    rows = _extract_rows_from_etrade_section(
+        section,
+        source="ClientStatements_9139_053119.pdf",
+        default_currency="USD",
+    )
+    assert len(rows) == 2
+    assert rows[0].trade_date.isoformat() == "2019-05-10"
+    assert rows[0].action == "SELL"
+    assert rows[0].ticker == "AMD"
+    assert rows[0].qty == Decimal("45")
+    assert rows[0].price == Decimal("27.0300")
+    assert rows[0].source == "ClientStatements_9139_053119.pdf"

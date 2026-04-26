@@ -25,15 +25,17 @@ uvx cad-capgains --help
 
 ## Schwab account statement PDFs (optional)
 
-This repo includes a small importer for Charles Schwab PDF statements that
-contain a **Stock Transaction Summary** (word positions are tuned for a common
-Schwab layout). It writes a CSV compatible with `capgains` and includes a
-`source` column.
+This repo includes an importer wrapper for brokerage PDF statements. Point it
+to a folder and it auto-detects supported files:
+- `Account Statement_*.PDF` (Schwab)
+- `ClientStatements_*.pdf` (E*TRADE)
+
+It writes a CSV compatible with `capgains` and includes a `source` column.
 
 From a git checkout, run:
 
 ```bash
-uv run schwab-to-acb acb_pdf -o <acb.csv> [-f] [-v]
+uv run statements-to-acb acb_pdf -o <acb.csv> [-f] [-v]
 ```
 
 The importer **writes a header row by default**. `capgains show` /
@@ -64,9 +66,9 @@ remove it before using the file elsewhere. Pass **`-f` / `--force`** to
 ignore the previous file and only detect duplicates **within** the current
 import (full rewrite from PDFs).
 
-Only files named like `Account Statement_*.PDF` are parsed; other PDFs in the
-input folder are skipped. Use **`-v` / `--verbose`** to see what was skipped
-and what was parsed.
+Only supported statement file patterns are parsed; other PDFs in the input
+folder are skipped. Use **`-v` / `--verbose`** to see what was skipped and what
+was parsed.
 
 # CSV File Requirements
 To start, create a CSV file that will contain all of your transactions. In the CSV file, each line will represent a `BUY` or `SELL` transaction.  Your transactions **must be in order**, with the oldest transactions coming first, followed by newer transactions coming later. The format is as follows:

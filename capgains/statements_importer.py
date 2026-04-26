@@ -30,6 +30,19 @@ _DATE_RE = re.compile(
 )
 _ISODATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _TIME_RE = re.compile(r"^\d{2}:\d{2}:\d{2}$")
+_ETRADE_TRADE_TIME_RE = re.compile(r"\d{2}:\d{2}")
+_ETRADE_ROW_RE = re.compile(
+    r"(?P<trade_date>\d{2}/\d{2}/\d{2,4})\s+"
+    r"(?P<trade_time>\d{2}:\d{2})\s+"
+    r"(?P<settle_date>\d{2}/\d{2}/\d{2,4})\s+"
+    r"(?P<desc>.+?)\s+"
+    r"(?P<ticker>[A-Z][A-Z0-9\.\-]{0,9})\s+"
+    r"(?P<ttype>Sold|Sell|Bought|Buy|Purchased)\s+"
+    r"(?P<qty>-?[\d,]+(?:\.\d+)?)\s+"
+    r"(?P<price>[\d,]+(?:\.\d+)?)\s+"
+    r"(?P<amt>[\d,]+(?:\.\d{2})?)"
+    r"(?=\s+\d{2}/\d{2}/\d{2,4}\s+\d{2}:\d{2}\s+\d{2}/\d{2}/\d{2,4}\s+|\s+TOTAL SECURITIES ACTIVITY)"  # noqa: E501
+)
 
 # Marks duplicate rows in the CSV (description) and in the terminal
 _DUP_PREFIX = "[DUPLICATE] "
@@ -102,7 +115,7 @@ def _import_fitz():
         raise click.ClickException(
             "PyMuPDF is required. In this repo run `uv sync` "
             "(pdf is a default group) or `uv sync --group pdf`, "
-            "then e.g. `uv run -m capgains.schwab_statement_importer`."
+            "then e.g. `uv run -m capgains.statements_importer`."
         ) from e
     return fitz
 
@@ -138,6 +151,11 @@ def _is_date_token(s: str) -> bool:
 
 def _is_time_token(s: str) -> bool:
     return bool(_TIME_RE.match(s.strip()))
+
+
+def _is_etrade_client_statement(path: Path) -> bool:
+    name = path.name.lower()
+    return name.endswith(".pdf") and name.startswith("clientstatements_")
 
 
 def _infer_split_factor_and_mode(
@@ -634,6 +652,82 @@ def extract_acb_rows_from_pdf(
     return rows
 
 
+def _extract_rows_from_etrade_section(
+    section_text: str,
+    source: str,
+    default_currency: str,
+) -> List[AcbRow]:
+    # Normalize whitespace to make row-regex matching robust.
+    normalized = " ".join(section_text.split())
+    rows: List[AcbRow] = []
+    for m in _ETRADE_ROW_RE.finditer(normalized):
+        try:
+            trade_date = _parse_trade_date(m.group("trade_date"))
+        except ValueError:
+            continue
+        ttype = m.group("ttype").lower()
+        action = "SELL" if ttype in ("sold", "sell") else "BUY"
+        qty_raw = _parse_money(m.group("qty"))
+        price = _parse_money(m.group("price")) or Decimal(0)
+        if qty_raw is None:
+            continue
+        qty = abs(qty_raw)
+        if qty <= 0:
+            continue
+        desc = " ".join(m.group("desc").split())
+        rows.append(
+            AcbRow(
+                trade_date=trade_date,
+                description=desc[:500] if desc else "Etrade Trade",
+                ticker=m.group("ticker"),
+                action=action,
+                qty=qty,
+                price=price,
+                commission=Decimal(0),
+                currency=default_currency,
+                source=source,
+            )
+        )
+    return rows
+
+
+def extract_acb_rows_from_etrade_pdf(
+    path: Path,
+    default_currency: str,
+) -> List[AcbRow]:
+    fitz = _import_fitz()
+    if not path.is_file() or path.stat().st_size <= 0:
+        return []
+    source = path.name.strip() or "Manual"
+    rows: List[AcbRow] = []
+    with fitz.open(path) as doc:
+        for page in doc:
+            text = page.get_text()
+            marker = "TRANSACTION HISTORY"
+            table = "SECURITIES PURCHASED OR SOLD"
+            if marker not in text or table not in text:
+                continue
+            start = text.find(marker)
+            end = text.find("WITHDRAWALS & DEPOSITS")
+            if end == -1:
+                end = text.find("TOTAL SECURITIES ACTIVITY")
+                if end != -1:
+                    # include the total marker for regex lookahead anchor
+                    end += len("TOTAL SECURITIES ACTIVITY")
+                else:
+                    end = len(text)
+            section = text[start:end]
+            rows.extend(
+                _extract_rows_from_etrade_section(
+                    section,
+                    source=source,
+                    default_currency=default_currency,
+                )
+            )
+    rows.sort(key=lambda r: (r.trade_date, r.ticker, r.action))
+    return rows
+
+
 def collect_rows_from_dir(
     input_dir: Path,
     default_currency: str,
@@ -641,20 +735,26 @@ def collect_rows_from_dir(
     verbose: bool = False,
 ) -> List[AcbRow]:
     pdfs = sorted(input_dir.glob("*.pdf")) + sorted(input_dir.glob("*.PDF"))
-    relevant_pdfs = [
+    schwab_pdfs = [
         p for p in pdfs
         if p.name.lower().startswith("account statement")
     ]
-    skipped_pdfs = [
+    etrade_pdfs = [
         p for p in pdfs
-        if p not in relevant_pdfs
+        if _is_etrade_client_statement(p)
     ]
+    relevant_pdfs = list(dict.fromkeys(schwab_pdfs + etrade_pdfs))
+    skipped_pdfs = [p for p in pdfs if p not in relevant_pdfs]
     if verbose:
-        msg = "Found {} PDF(s): {} Account Statement file(s), {} skipped."
+        msg = (
+            "Found {} PDF(s): {} Schwab Account Statement file(s), "
+            "{} E*TRADE ClientStatement file(s), {} skipped."
+        )
         click.echo(
             msg.format(
                 len(pdfs),
-                len(relevant_pdfs),
+                len(schwab_pdfs),
+                len(etrade_pdfs),
                 len(skipped_pdfs),
             ),
             err=True,
@@ -671,7 +771,12 @@ def collect_rows_from_dir(
             continue
         if verbose:
             click.echo("Parsing {}".format(p.name), err=True)
-        all_rows.extend(extract_acb_rows_from_pdf(p, default_currency))
+        if _is_etrade_client_statement(p):
+            all_rows.extend(
+                extract_acb_rows_from_etrade_pdf(p, default_currency)
+            )
+        else:
+            all_rows.extend(extract_acb_rows_from_pdf(p, default_currency))
     all_rows = _normalize_split_rows(all_rows, verbose=verbose)
     all_rows.sort(key=lambda r: (r.trade_date, r.ticker, r.action))
     return all_rows
